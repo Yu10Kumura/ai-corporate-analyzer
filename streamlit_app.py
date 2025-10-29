@@ -334,7 +334,7 @@ class StreamlitCompanyResearcher:
             return False, f"検証エラー: {str(e)}"
     
     def generate_chat_response(self, question, analysis_data, company_info, chat_history):
-        """チャット質問への回答生成（ハルシネーション対策付き）"""
+        """チャット質問への回答生成（従来の分析結果ベース）"""
         
         # 分析結果をコンテキストとして整理
         context = f"""
@@ -346,9 +346,6 @@ class StreamlitCompanyResearcher:
 
 【ビジネス分析結果】:
 {json.dumps(analysis_data.get('business_analysis', {}), ensure_ascii=False, indent=2)}
-
-【IR情報ソース】:
-{json.dumps(analysis_data.get('ir_sources', []), ensure_ascii=False, indent=2)}
 """
         
         # チャット履歴の整理
@@ -358,17 +355,16 @@ class StreamlitCompanyResearcher:
             for q, a in chat_history[-3:]:  # 直近3件のみ
                 history_context += f"Q: {q}\nA: {a}\n\n"
         
-        # 制約付きプロンプト
+        # 分析結果ベースのプロンプト（IR制約なし）
         chat_prompt = f"""
-あなたは企業分析の専門家です。以下のルールを厳格に守って回答してください：
+あなたは企業分析の専門家です。以下のルールを守って回答してください：
 
-【重要制約】
-1. 提供された分析結果とIR情報のみを参照すること
+【回答ルール】
+1. 提供された分析結果のみを参照すること
 2. データにない情報は「分析データには含まれていません」と明記
-3. 推測や一般論ではなく、具体的な根拠を示すこと
-4. 必ず出典（分析結果の該当箇所）を明記すること
-5. 「おそらく」「一般的に」「推測では」等の表現は使用禁止
-6. 回答は200-300文字以内に収めること
+3. 具体的な根拠を示すこと
+4. 回答は200-300文字以内に収めること
+5. 推測的な表現は避け、分析結果に基づく事実のみ回答
 
 {context}
 
@@ -376,25 +372,18 @@ class StreamlitCompanyResearcher:
 
 現在の質問: {question}
 
-上記の分析結果のみを使用して回答してください。データにない情報については「分析データに含まれていません」と回答してください。
+上記の分析結果のみを使用して回答してください。
 """
         
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": chat_prompt}],
-                temperature=0.1,
+                temperature=0.2,
                 max_tokens=300
             )
             
             answer = response.choices[0].message.content.strip()
-            
-            # ハルシネーション対策チェック
-            if company_info.get('enable_hallucination_check', True):
-                is_valid, validation_message = self.validate_response_content(answer, analysis_data.get('ir_sources', []))
-                if not is_valid:
-                    return f"⚠️ 回答生成エラー: {validation_message}\n\n申し訳ございませんが、分析データに基づく正確な回答を生成できませんでした。質問を変更してお試しください。"
-            
             return answer
             
         except Exception as e:
@@ -511,17 +500,16 @@ JSON形式で以下の通り回答してください：
         return prompt
     
     def research_company(self, company_info):
-        """LLMに企業調査を依頼（IR情報収集＋従来方式のハイブリッド）"""
+        """LLMに企業調査を依頼（IR機能一時無効化、従来方式で安定化）"""
         
-        # IR情報収集（オプション機能）
-        ir_data = []
-        if company_info.get('company_domain') and company_info.get('enable_hallucination_check', True):
+        # IR情報収集を一時無効化
+        if False:  # IR機能を無効化
             st.info("🔍 IR情報を自動収集中...")
             try:
                 crawler = SmartIRCrawler(
                     company_info['company_domain'],
                     company_info.get('ir_top_url'),
-                    max_depth=2,  # 深度を制限
+                    max_depth=2,
                     date_limit_years=3
                 )
                 ir_data = crawler.crawl_with_intelligence()
@@ -534,16 +522,11 @@ JSON形式で以下の通り回答してください：
                 st.warning(f"⚠️ IR収集エラー: {str(e)} - 従来の分析方法を使用します。")
                 ir_data = []
         
-        # プロンプト選択：IR情報がある場合は制約付き、ない場合は従来方式
-        if ir_data and len(ir_data) >= 2:  # 十分なIR情報がある場合のみ
-            st.info("📊 IR情報を活用した高精度分析を実行中...")
-            prompt = self.create_constrained_prompt(company_info, ir_data)
-            temperature = 0.1
-        else:
-            st.info("🔍 従来の汎用分析を実行中...")
-            prompt = self.create_research_prompt(company_info)
-            temperature = 0.3
-            ir_data = []  # IR情報をクリア
+        # 従来の安定した分析方式を使用
+        st.info("🔍 安定した汎用分析を実行中...")
+        prompt = self.create_research_prompt(company_info)
+        temperature = 0.3
+        ir_data = []  # IR情報をクリア
         
         try:
             response = self.client.chat.completions.create(
@@ -568,23 +551,8 @@ JSON形式で以下の通り回答してください：
             
             research_data = json.loads(json_content)
             
-            # ハルシネーション対策チェック（IR情報がある場合のみ）
-            if ir_data and company_info.get('enable_hallucination_check', True):
-                is_valid, validation_message = self.validate_response_content(json_content, ir_data)
-                if not is_valid:
-                    st.warning(f"⚠️ 回答検証: {validation_message}")
-            
-            # IR情報をメタデータとして追加（IR情報がある場合のみ）
-            if ir_data:
-                research_data['ir_sources'] = [
-                    {
-                        'url': item['url'],
-                        'title': item['title'],
-                        'date': item['date'].isoformat(),
-                        'importance': item['importance']
-                    }
-                    for item in ir_data[:5]
-                ]
+            # IR関連の処理はスキップ
+            # 従来通りの分析結果のみ返却
             
             return research_data
             
@@ -724,12 +692,12 @@ def main():
             progress_bar.progress(100)
             status_text.text("✅ 分析完了！")
             
-            # 分析結果の構造確認
-            st.info("📝 分析結果構造:")
+            # 分析結果の構造確認（簡素化）
+            st.info("📝 分析結果:")
             st.json({
                 "データキー": list(research_data.keys()),
-                "EVPキー": list(research_data.get('evp', {}).keys()) if research_data.get('evp') else "なし",
-                "ビジネス分析キー": list(research_data.get('business_analysis', {}).keys()) if research_data.get('business_analysis') else "なし"
+                "EVP項目数": len(research_data.get('evp', {})),
+                "ビジネス分析項目数": len(research_data.get('business_analysis', {}))
             })
             
             # 結果表示
@@ -832,8 +800,8 @@ def main():
                     st.session_state.analysis_context = research_data
                     st.session_state.chat_history = []  # 新しい分析時はチャット履歴をリセット
                 
-                # ハルシネーション対策の警告
-                st.warning("⚠️ この質問機能は分析結果とIR情報に基づいて回答します。推測的な回答は行いません。")
+                # 分析結果ベースの警告
+                st.warning("⚠️ この質問機能は分析結果に基づいて回答します。分析データ以外の情報は提供できません。")
                 
                 # チャット履歴表示
                 for i, (question, answer) in enumerate(st.session_state.chat_history):
