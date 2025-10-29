@@ -528,14 +528,14 @@ JSON形式で以下の通り回答してください：
     
     def save_results(self, company_info, research_data):
         """結果をJSONファイルに保存"""
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"research_{company_info['company_name']}_{timestamp}.json"
         filepath = self.results_dir / filename
         
         save_data = {
             "company_info": company_info,
             "research_results": research_data,
-            "generated_at": datetime.datetime.now().isoformat()
+            "generated_at": datetime.now().isoformat()
         }
         
         try:
@@ -639,7 +639,7 @@ def main():
             "date_range": date_range,
             "enable_hallucination_check": enable_hallucination_check,
             "enable_chat": enable_chat,
-            "timestamp": datetime.datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat()
         }
         
         # 調査実行
@@ -723,7 +723,7 @@ def main():
                 st.download_button(
                     label="💾 JSON結果をダウンロード",
                     data=json_output,
-                    file_name=f"research_{company_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    file_name=f"research_{company_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                     mime="application/json"
                 )
                 
