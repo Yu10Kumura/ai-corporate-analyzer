@@ -45,7 +45,24 @@ pip install -r requirements.txt
 ```bash
 # .envファイル作成
 echo "OPENAI_API_KEY=your_api_key_here" > .env
+echo "SERPAPI_KEY=your_serpapi_key_here" >> .env  # オプション
 ```
+
+**環境変数説明:**
+- `OPENAI_API_KEY`: OpenAI APIキー（必須）
+- `SERPAPI_KEY`: SerpAPI APIキー（オプション - 外部情報収集用）
+
+**SerpAPI設定（オプション）:**
+1. [SerpAPI](https://serpapi.com/)でアカウント作成
+2. 無料枠で月100回検索利用可能
+3. ダッシュボードからAPIキーを取得
+4. 未設定でもフォールバック機能で動作
+
+**SerpAPIキー取得手順:**
+1. https://serpapi.com/ にアクセス
+2. 「Sign Up」でアカウント作成
+3. ダッシュボードの「API Key」をコピー
+4. 環境変数 `SERPAPI_KEY` に設定
 
 ### 3. アプリ起動
 ```bash
@@ -61,8 +78,11 @@ streamlit run streamlit_app.py
    ```toml
    [secrets]
    OPENAI_API_KEY = "sk-proj-..."
+   SERPAPI_KEY = "your_serpapi_key_here"  # オプション
    ```
 3. **自動デプロイ**でアプリが公開されます
+
+**注意**: SerpAPIキーを設定しない場合、外部情報収集はスキップされ、フォールバック分析が使用されます。
 
 ## 📁 ファイル構成
 
