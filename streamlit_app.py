@@ -7,6 +7,7 @@ import streamlit as st
 import os
 import json
 import datetime
+import time
 import re
 import requests
 from pathlib import Path
@@ -688,7 +689,155 @@ class StreamlitCompanyResearcher:
             if indicator in content_lower:
                 score += 10
         
-        return max(0, min(100, score))  # 0-100の範囲に制限    def extract_search_keywords(self, question):
+        return max(0, min(100, score))  # 0-100の範囲に制限
+    
+    def search_external_sources(self, company_name, industry_keywords):
+        """信頼性の高い外部ソースから市場・競合情報を収集"""
+        external_data = []
+        
+        st.info("🌐 外部信頼性ソースから業界情報を収集中...")
+        
+        # 信頼性の高い情報ソース
+        trusted_sources = [
+            {
+                'domain': 'nikkei.com',
+                'name': '日本経済新聞',
+                'search_terms': [f'{company_name} 市場規模', f'{company_name} 競合', f'{industry_keywords} 業界動向']
+            },
+            {
+                'domain': 'toyokeizai.net', 
+                'name': '東洋経済オンライン',
+                'search_terms': [f'{company_name} 業界', f'{industry_keywords} 市場']
+            },
+            {
+                'domain': 'itmedia.co.jp',
+                'name': 'ITmedia',
+                'search_terms': [f'{company_name} IT', f'{industry_keywords} デジタル']
+            },
+            {
+                'domain': 'diamond.jp',
+                'name': 'ダイヤモンド・オンライン', 
+                'search_terms': [f'{company_name} 分析', f'{industry_keywords} トレンド']
+            }
+        ]
+        
+        for source in trusted_sources:
+            st.write(f"📰 {source['name']}を検索中...")
+            
+            for search_term in source['search_terms'][:2]:  # 最大2つの検索語
+                try:
+                    # Google検索風のクエリ構築
+                    search_query = f"site:{source['domain']} {search_term}"
+                    articles = self.search_web_articles(search_query, source['name'])
+                    
+                    if articles:
+                        external_data.extend(articles)
+                        st.success(f"✅ {len(articles)}件の記事を発見")
+                    
+                    # API制限を考慮して間隔を空ける
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    st.warning(f"⚠️ {source['name']}の検索でエラー: {str(e)}")
+                    continue
+        
+        # 業界レポート・調査会社の情報も検索
+        research_firms = [
+            f'{industry_keywords} 市場規模 調査',
+            f'{company_name} シェア レポート',
+            f'{industry_keywords} 競合 分析'
+        ]
+        
+        st.write("📊 業界調査レポートを検索中...")
+        for query in research_firms:
+            try:
+                reports = self.search_industry_reports(query)
+                if reports:
+                    external_data.extend(reports)
+                    st.success(f"✅ {len(reports)}件のレポートを発見")
+                time.sleep(1)
+            except:
+                continue
+        
+        return external_data[:10]  # 最大10件の外部情報
+    
+    def search_web_articles(self, search_query, source_name):
+        """ウェブ記事の検索（簡易版実装）"""
+        articles = []
+        
+        try:
+            # Googleの検索結果ページを取得（簡易版）
+            search_url = f"https://www.google.com/search?q={search_query}"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+            }
+            
+            response = self.session.get(search_url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # 検索結果から記事のタイトルとスニペットを抽出
+                for result in soup.find_all('div', class_='g')[:3]:  # 上位3件
+                    title_elem = result.find('h3')
+                    snippet_elem = result.find('div', class_='VwiC3b')
+                    link_elem = result.find('a')
+                    
+                    if title_elem and snippet_elem and link_elem:
+                        articles.append({
+                            'title': title_elem.get_text(),
+                            'snippet': snippet_elem.get_text(),
+                            'url': link_elem.get('href'),
+                            'source': source_name,
+                            'type': '外部記事'
+                        })
+        except:
+            pass
+        
+        return articles
+    
+    def search_industry_reports(self, query):
+        """業界レポートの検索"""
+        reports = []
+        
+        try:
+            # 業界調査でよく使われるサイトを対象に検索
+            report_sources = [
+                'statista.com', 'grandviewresearch.com', 'marketsandmarkets.com',
+                'technavio.com', 'fuji-keizai.co.jp'
+            ]
+            
+            for source in report_sources[:2]:  # 最大2つのソース
+                search_url = f"https://www.google.com/search?q=site:{source} {query}"
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+                }
+                
+                response = self.session.get(search_url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    for result in soup.find_all('div', class_='g')[:2]:  # 上位2件
+                        title_elem = result.find('h3')
+                        snippet_elem = result.find('div', class_='VwiC3b')
+                        link_elem = result.find('a')
+                        
+                        if title_elem and snippet_elem and link_elem:
+                            reports.append({
+                                'title': title_elem.get_text(),
+                                'snippet': snippet_elem.get_text(), 
+                                'url': link_elem.get('href'),
+                                'source': f'業界調査({source})',
+                                'type': '業界レポート'
+                            })
+                            
+                time.sleep(1)  # API制限対策
+                
+        except:
+            pass
+        
+        return reports
+    
+    def extract_search_keywords(self, question):
         """質問から検索キーワードを抽出"""
         # 企業分析に関連するキーワードマッピング
         keyword_mapping = {
@@ -1025,8 +1174,90 @@ JSON形式で以下の通り回答してください：
 """
         return prompt
     
+    def create_enhanced_research_prompt(self, company_info, external_data):
+        """マルチソース情報を統合した強化プロンプト作成"""
+        
+        # 外部情報の整理
+        external_context = ""
+        if external_data:
+            external_context = "\n【外部信頼性ソース情報】:\n"
+            for i, item in enumerate(external_data, 1):
+                external_context += f"{i}. 【{item['source']}】{item['title']}\n"
+                external_context += f"   概要: {item['snippet']}\n"
+                external_context += f"   URL: {item['url']}\n\n"
+        
+        prompt = f"""
+あなたは企業分析の専門家です。複数の情報ソースを統合して正確な分析を行ってください。
+
+【分析対象企業】
+企業名: {company_info['company_name']}
+分析重点分野: {company_info['focus_area']}
+企業ドメイン: {company_info.get('company_domain', '不明')}
+
+{external_context}
+
+【CRITICAL分析ルール - 厳格に遵守】
+1. **情報ソースの明確な区別**:
+   - 企業公式情報: 「企業公式サイトによると」
+   - 外部記事情報: 「{external_data[0]['source'] if external_data else 'N/A'}によると」 
+   - 推定・一般論: 「推定値として」「一般的な業界動向として」
+   
+2. **競合分析の精度向上**:
+   - 企業が公式に言及した競合のみ記載
+   - 外部記事で言及された競合は「外部分析によると」と明記
+   - 業界を正確に定義（不動産開発 vs 不動産情報サービス等）
+   
+3. **市場規模・数値の信頼性**:
+   - 外部調査レポートの数値は出典明記
+   - 企業開示の数値は「○○年○○資料による」
+   - 推定値は「推定」「約」等で明記
+   
+4. **業界定義の明確化**:
+   - 企業の実際の事業領域を正確に特定
+   - 関連業界との区別を明確に
+   
+5. **情報不足時の対応**:
+   - 不明な情報は「確認できません」と正直に記載
+   - 推測が必要な場合は「推定」「可能性」で明記
+
+JSON形式で以下の通り回答してください：
+
+```json
+{{
+  "evp": {{
+    "rewards": "具体的な報酬・待遇情報（情報源明記）",
+    "opportunity": "具体的な成長機会情報（情報源明記）", 
+    "organization": "具体的な組織・企業文化情報（情報源明記）",
+    "people": "具体的な人材・マネジメント情報（情報源明記）",
+    "work": "具体的な働き方・業務情報（情報源明記）"
+  }},
+  "business_analysis": {{
+    "industry_market": "正確な業界定義と市場分析（外部ソース活用）",
+    "market_position": "正確な業界内ポジション（競合の正確な特定）",
+    "differentiation": "独自性・差別化要因（公式情報ベース）",
+    "business_portfolio": "事業ポートフォリオ分析（開示情報ベース）"
+  }}
+}}
+```
+
+各項目は**300-500文字で具体的に**記載し、以下を厳格に遵守してください：
+
+【情報源区別の例】
+- 「企業公式サイトによると、SUUMO事業は...」
+- 「日本経済新聞の分析によると、不動産情報サービス市場は...」
+- 「業界一般論として、デジタル化が進んでいるが」
+- 「推定値として営業利益率は...」
+- 「公式開示情報では競合企業の明示的な言及は確認できません」
+
+**使用禁止**: 出典不明の具体的数値、根拠なき競合企業名、業界の誤分類
+"""
+        return prompt
+    
     def research_company(self, company_info):
-        """LLMに企業調査を依頼（IR機能一時無効化、従来方式で安定化）"""
+        """マルチソース企業調査（企業サイト + 外部信頼性ソース + LLM）"""
+        
+        # Step 1: 企業サイトからの一次情報収集（既存）
+        st.info("🔍 Step 1: 企業公式サイトから一次情報を収集中...")
         
         # IR情報収集を一時無効化
         if False:  # IR機能を無効化
@@ -1048,11 +1279,37 @@ JSON形式で以下の通り回答してください：
                 st.warning(f"⚠️ IR収集エラー: {str(e)} - 従来の分析方法を使用します。")
                 ir_data = []
         
-        # 従来の安定した分析方式を使用
-        st.info("🔍 安定した汎用分析を実行中...")
-        prompt = self.create_research_prompt(company_info)
-        temperature = 0.3
         ir_data = []  # IR情報をクリア
+        
+        # Step 2: 外部信頼性ソースからの情報収集（新機能）
+        st.info("🌐 Step 2: 外部信頼性ソースから業界・競合情報を収集中...")
+        try:
+            industry_keywords = company_info.get('focus_area', '').replace('分野', '').replace('領域', '')
+            external_data = self.search_external_sources(company_info['company_name'], industry_keywords)
+            
+            if external_data:
+                st.success(f"✅ {len(external_data)}件の外部情報を収集しました")
+                
+                # 外部情報の詳細表示
+                with st.expander("🔍 収集した外部情報の詳細"):
+                    for i, item in enumerate(external_data, 1):
+                        st.write(f"**{i}. {item['source']}** ({item['type']})")
+                        st.write(f"タイトル: {item['title']}")
+                        st.write(f"概要: {item['snippet'][:200]}...")
+                        st.write(f"URL: {item['url']}")
+                        st.write("---")
+            else:
+                st.warning("⚠️ 外部情報の収集ができませんでした")
+                external_data = []
+                
+        except Exception as e:
+            st.warning(f"⚠️ 外部情報収集エラー: {str(e)}")
+            external_data = []
+        
+        # Step 3: マルチソース統合分析
+        st.info("🧠 Step 3: マルチソース情報を統合してAI分析を実行中...")
+        prompt = self.create_enhanced_research_prompt(company_info, external_data)
+        temperature = 0.1  # より保守的な温度設定
         
         try:
             response = self.client.chat.completions.create(
