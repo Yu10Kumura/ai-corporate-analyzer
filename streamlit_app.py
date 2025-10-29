@@ -685,155 +685,181 @@ def main():
             progress_bar.progress(100)
             status_text.text("✅ 分析完了！")
             
-            # 分析結果の構造確認（簡素化）
-            st.info("📝 分析結果:")
-            st.json({
-                "データキー": list(research_data.keys()),
-                "EVP項目数": len(research_data.get('evp', {})),
-                "ビジネス分析項目数": len(research_data.get('business_analysis', {}))
-            })
-            
-            # 結果表示
-            st.success("🎉 AI分析が完了しました！")
-            
-            # 基本情報表示
-            st.markdown("---")
-            st.subheader("📊 分析結果サマリー")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("🏢 企業名", company_name)
-            with col2:
-                st.metric("🎯 重点分野", focus_area)
-            with col3:
-                st.metric("📊 分析レベル", analysis_level)
-            with col4:
-                st.metric("🕐 分析日時", company_info['timestamp'][:19])
-            
-            st.markdown("---")
-            
-            # タブ形式で結果表示
-            tab1, tab2, tab3 = st.tabs(["📈 EVP分析", "🏆 ビジネス分析", "📄 JSON出力"])
-            
-            with tab1:
-                st.subheader("📈 EVP（Employee Value Proposition）分析")
-                
-                evp_labels = {
-                    "rewards": "💰 Rewards（報酬・待遇）",
-                    "opportunity": "🚀 Opportunity（機会・成長）",
-                    "organization": "🏢 Organization（組織・企業文化）",
-                    "people": "👥 People（人材・マネジメント）",
-                    "work": "💼 Work（働き方・業務）"
-                }
-                
-                # EVP分析結果の安全な表示
-                evp_data = research_data.get('evp', {})
-                if evp_data:
-                    for key, label in evp_labels.items():
-                        with st.expander(label, expanded=True):
-                            content = evp_data.get(key, "分析データが不足しています")
-                            st.write(content)
-                else:
-                    st.warning("EVP分析データが生成されませんでした。")
-                    st.json(research_data)  # デバッグ用
-            
-            with tab2:
-                st.subheader("🏆 ビジネス分析")
-                
-                business_labels = {
-                    "industry_market": "📈 業界・市場分析",
-                    "market_position": "🏆 業界内ポジション",
-                    "differentiation": "⭐ 独自性・差別化要因",
-                    "business_portfolio": "🏗️ 事業ポートフォリオ分析"
-                }
-                
-                # ビジネス分析結果の安全な表示
-                business_data = research_data.get('business_analysis', {})
-                if business_data:
-                    for key, label in business_labels.items():
-                        with st.expander(label, expanded=True):
-                            content = business_data.get(key, "分析データが不足しています")
-                            st.write(content)
-                else:
-                    st.warning("ビジネス分析データが生成されませんでした。")
-                    st.json(research_data)  # デバッグ用
-            
-            with tab3:
-                st.subheader("📄 JSON形式の分析結果")
-                st.markdown("分析結果をJSON形式で表示します。コピーして他のシステムでも活用できます。")
-                
-                # ダウンロードボタン
-                json_output = json.dumps(save_data, ensure_ascii=False, indent=2)
-                st.download_button(
-                    label="💾 JSON結果をダウンロード",
-                    data=json_output,
-                    file_name=f"research_{company_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-                
-                # JSON表示
-                st.code(json_output, language="json")
-                
-                if filepath:
-                    st.info(f"💾 結果はサーバーにも保存されました: {filepath}")
-            
-            # チャット機能（分析結果後のみ表示）
-            if company_info.get('enable_chat', True):
-                st.markdown("---")
-                st.subheader("💬 分析結果に関する追加質問")
-                
-                # セッション状態の初期化
-                if 'chat_history' not in st.session_state:
-                    st.session_state.chat_history = []
-                if 'analysis_context' not in st.session_state:
-                    st.session_state.analysis_context = None
-                
-                # 分析結果をコンテキストとして保存
-                if st.session_state.analysis_context != research_data:
-                    st.session_state.analysis_context = research_data
-                    st.session_state.chat_history = []  # 新しい分析時はチャット履歴をリセット
-                
-                # 分析結果ベースの警告
-                st.warning("⚠️ この質問機能は分析結果に基づいて回答します。分析データ以外の情報は提供できません。")
-                
-                # チャット履歴表示
-                for i, (question, answer) in enumerate(st.session_state.chat_history):
-                    with st.chat_message("user"):
-                        st.write(question)
-                    with st.chat_message("assistant"):
-                        st.write(answer)
-                
-                # 質問入力
-                user_question = st.chat_input("分析結果について質問してください...")
-                
-                if user_question:
-                    # 質問を履歴に追加
-                    with st.chat_message("user"):
-                        st.write(user_question)
-                    
-                    # AI回答生成
-                    with st.chat_message("assistant"):
-                        with st.spinner("回答を生成中..."):
-                            answer = researcher.generate_chat_response(
-                                user_question, 
-                                research_data, 
-                                company_info,
-                                st.session_state.chat_history
-                            )
-                            st.write(answer)
-                    
-                    # 履歴に追加（セッション状態を更新）
-                    st.session_state.chat_history.append((user_question, answer))
-                
-                # チャット履歴リセットボタン
-                if st.button("🗑️ チャット履歴をリセット"):
-                    st.session_state.chat_history = []
-                    st.success("チャット履歴をリセットしました。")
-        
+            # セッション状態に分析結果を保存
+            st.session_state.analysis_results = {
+                "research_data": research_data,
+                "company_info": company_info,
+                "save_data": save_data,
+                "filepath": filepath,
+                "researcher": researcher
+            }
         else:
             progress_bar.progress(0)
             status_text.text("❌ 分析に失敗しました")
             st.error("❌ AI分析に失敗しました。APIキーの設定またはネットワーク接続を確認してください。")
+    
+    # 分析結果の表示（セッション状態から）
+    if 'analysis_results' in st.session_state:
+        results = st.session_state.analysis_results
+        research_data = results["research_data"]
+        company_info = results["company_info"]
+        save_data = results["save_data"]
+        filepath = results["filepath"]
+        researcher = results["researcher"]
+        
+        # 分析結果の構造確認（簡素化）
+        st.info("📝 分析結果:")
+        st.json({
+            "データキー": list(research_data.keys()),
+            "EVP項目数": len(research_data.get('evp', {})),
+            "ビジネス分析項目数": len(research_data.get('business_analysis', {}))
+        })
+        
+        # 結果表示
+        st.success("🎉 AI分析が完了しました！")
+        
+        # 基本情報表示
+        st.markdown("---")
+        st.subheader("📊 分析結果サマリー")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("🏢 企業名", company_info["company_name"])
+        with col2:
+            st.metric("🎯 重点分野", company_info["focus_area"])
+        with col3:
+            st.metric("📊 分析レベル", company_info["analysis_level"])
+        with col4:
+            st.metric("🕐 分析日時", company_info['timestamp'][:19])
+        
+        st.markdown("---")
+            
+        
+        # タブ形式で結果表示
+        tab1, tab2, tab3 = st.tabs(["📈 EVP分析", "🏆 ビジネス分析", "📄 JSON出力"])
+        
+        with tab1:
+            st.subheader("📈 EVP（Employee Value Proposition）分析")
+            
+            evp_labels = {
+                "rewards": "💰 Rewards（報酬・待遇）",
+                "opportunity": "🚀 Opportunity（機会・成長）",
+                "organization": "🏢 Organization（組織・企業文化）",
+                "people": "👥 People（人材・マネジメント）",
+                "work": "💼 Work（働き方・業務）"
+            }
+            
+            # EVP分析結果の安全な表示
+            evp_data = research_data.get('evp', {})
+            if evp_data:
+                for key, label in evp_labels.items():
+                    with st.expander(label, expanded=True):
+                        content = evp_data.get(key, "分析データが不足しています")
+                        st.write(content)
+            else:
+                st.warning("EVP分析データが生成されませんでした。")
+                st.json(research_data)  # デバッグ用
+        
+        with tab2:
+            st.subheader("🏆 ビジネス分析")
+            
+            business_labels = {
+                "industry_market": "📈 業界・市場分析",
+                "market_position": "🏆 業界内ポジション",
+                "differentiation": "⭐ 独自性・差別化要因",
+                "business_portfolio": "🏗️ 事業ポートフォリオ分析"
+            }
+            
+            # ビジネス分析結果の安全な表示
+            business_data = research_data.get('business_analysis', {})
+            if business_data:
+                for key, label in business_labels.items():
+                    with st.expander(label, expanded=True):
+                        content = business_data.get(key, "分析データが不足しています")
+                        st.write(content)
+            else:
+                st.warning("ビジネス分析データが生成されませんでした。")
+                st.json(research_data)  # デバッグ用
+        
+        with tab3:
+            st.subheader("📄 JSON形式の分析結果")
+            st.markdown("分析結果をJSON形式で表示します。コピーして他のシステムでも活用できます。")
+            
+            # ダウンロードボタン
+            json_output = json.dumps(save_data, ensure_ascii=False, indent=2)
+            st.download_button(
+                label="💾 JSON結果をダウンロード",
+                data=json_output,
+                file_name=f"research_{company_info['company_name']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json"
+            )
+            
+            # JSON表示
+            st.code(json_output, language="json")
+            
+            if filepath:
+                st.info(f"💾 結果はサーバーにも保存されました: {filepath}")
+        
+        # チャット機能（分析結果後のみ表示）
+        if company_info.get('enable_chat', True):
+            st.markdown("---")
+            st.subheader("💬 分析結果に関する追加質問")
+            
+            # セッション状態の初期化
+            if 'chat_history' not in st.session_state:
+                st.session_state.chat_history = []
+            if 'analysis_context' not in st.session_state:
+                st.session_state.analysis_context = None
+            
+            # 分析結果をコンテキストとして保存
+            if st.session_state.analysis_context != research_data:
+                st.session_state.analysis_context = research_data
+                st.session_state.chat_history = []  # 新しい分析時はチャット履歴をリセット
+            
+            # 分析結果ベースの警告
+            st.warning("⚠️ この質問機能は分析結果に基づいて回答します。分析データ以外の情報は提供できません。")
+            
+            # チャット履歴表示
+            for i, (question, answer) in enumerate(st.session_state.chat_history):
+                with st.chat_message("user"):
+                    st.write(question)
+                with st.chat_message("assistant"):
+                    st.write(answer)
+            
+            # 質問入力
+            user_question = st.chat_input("分析結果について質問してください...")
+            
+            if user_question:
+                # 質問を履歴に追加
+                with st.chat_message("user"):
+                    st.write(user_question)
+                
+                # AI回答生成
+                with st.chat_message("assistant"):
+                    with st.spinner("回答を生成中..."):
+                        answer = researcher.generate_chat_response(
+                            user_question, 
+                            research_data, 
+                            company_info,
+                            st.session_state.chat_history
+                        )
+                        st.write(answer)
+                
+                # 履歴に追加（セッション状態を更新）
+                st.session_state.chat_history.append((user_question, answer))
+            
+            # チャット履歴リセットボタン
+            if st.button("🗑️ チャット履歴をリセット"):
+                st.session_state.chat_history = []
+                st.success("チャット履歴をリセットしました。")
+                
+        # 新しい分析を開始するボタン
+        if st.button("🔄 新しい分析を開始"):
+            # セッション状態をクリア
+            for key in ['analysis_results', 'chat_history', 'analysis_context']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
 
     # フッター
     st.markdown("---")
