@@ -229,6 +229,12 @@ class StreamlitCompanyResearcher:
         # 結果保存ディレクトリ（本番環境では一時的）
         self.results_dir = Path('results')
         self.results_dir.mkdir(exist_ok=True)
+        
+        # HTTP セッション（Web検索用）
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        })
     
     def extract_domain_from_url(self, url):
         """URLからドメインを抽出"""
@@ -333,11 +339,364 @@ class StreamlitCompanyResearcher:
         except Exception as e:
             return False, f"検証エラー: {str(e)}"
     
-    def generate_chat_response(self, question, analysis_data, company_info, chat_history):
-        """チャット質問への回答生成（従来の分析結果ベース）"""
+    def search_existing_sources(self, question, analysis_data):
+        """深度調査: 企業サイトの階層を深く探索して関連情報を収集"""
+        company_domain = analysis_data.get('company_domain')
+        if not company_domain:
+            return []
         
-        # 分析結果をコンテキストとして整理
-        context = f"""
+        try:
+            # 質問に基づいて検索キーワードを生成
+            search_keywords = self.extract_search_keywords(question)
+            
+            st.info("🔍 企業サイトを深度調査中...")
+            
+            # 段階的な深度調査
+            additional_sources = []
+            
+            # Step 1: 基本セクション + サブページ発見
+            base_sections = {
+                'ir': ['investor', 'ir', 'finance'],
+                'business': ['business', 'service', 'product', 'solution'],
+                'company': ['company', 'about', 'corporate'],
+                'news': ['news', 'press', 'release'],
+                'strategy': ['strategy', 'vision', 'plan', 'management']
+            }
+            
+            for section_type, url_patterns in base_sections.items():
+                section_sources = self.deep_explore_section(
+                    company_domain, section_type, url_patterns, search_keywords, question
+                )
+                additional_sources.extend(section_sources)
+                
+                # 最大12ソースまで（各セクション2-3個）
+                if len(additional_sources) >= 12:
+                    break
+            
+            # Step 2: 重要文書の自動発見・取得
+            document_sources = self.discover_important_documents(
+                company_domain, search_keywords, question
+            )
+            additional_sources.extend(document_sources)
+            
+            return additional_sources[:15]  # 最大15ソース
+            
+        except Exception as e:
+            st.warning(f"深度調査中にエラー: {str(e)}")
+            return []
+    
+    def deep_explore_section(self, domain, section_type, url_patterns, keywords, question):
+        """特定セクションの深度探索"""
+        sources = []
+        
+        for pattern in url_patterns:
+            # 複数のURL候補を試行
+            candidate_urls = [
+                f"https://{domain}/{pattern}/",
+                f"https://{domain}/{pattern}.html",
+                f"https://{domain}/jp/{pattern}/",
+                f"https://{domain}/ja/{pattern}/",
+            ]
+            
+            for base_url in candidate_urls:
+                try:
+                    response = self.session.get(base_url, timeout=15)
+                    if response.status_code != 200:
+                        continue
+                        
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # サブページリンクを発見
+                    subpage_links = self.discover_subpages(soup, base_url, section_type)
+                    
+                    # ベースページのコンテンツ解析
+                    base_content = self.extract_relevant_content(soup, keywords, question)
+                    if base_content:
+                        sources.append({
+                            'url': base_url,
+                            'content': base_content,
+                            'source_type': f'{section_type.title()}情報',
+                            'depth': 'base'
+                        })
+                    
+                    # サブページの探索（最大3つまで）
+                    for sublink in subpage_links[:3]:
+                        sub_content = self.explore_subpage(sublink, keywords, question)
+                        if sub_content:
+                            sources.append(sub_content)
+                    
+                    break  # 成功したら他の候補URLは試行しない
+                    
+                except:
+                    continue
+                    
+            if len(sources) >= 3:  # セクションあたり最大3ソース
+                break
+                
+        return sources
+    
+    def discover_subpages(self, soup, base_url, section_type):
+        """セクション内のサブページを発見"""
+        subpages = []
+        
+        # セクション別の重要キーワード
+        important_keywords = {
+            'ir': ['決算', '業績', '説明会', '中期', '計画', '有価証券', '財務', 'financial'],
+            'business': ['事業紹介', 'サービス', '製品', 'ソリューション', '強み', '特徴'],
+            'company': ['代表', 'メッセージ', '沿革', '組織', 'ミッション', 'ビジョン'],
+            'news': ['プレス', 'リリース', '発表', '新着', '最新'],
+            'strategy': ['戦略', '方針', 'ビジョン', '計画', '取り組み', 'DX']
+        }
+        
+        keywords = important_keywords.get(section_type, [])
+        
+        # リンクを探索
+        for link in soup.find_all('a', href=True):
+            href = link.get('href')
+            text = link.get_text().strip()
+            
+            if not href or len(text) < 3:
+                continue
+                
+            # 相対パスを絶対パスに変換
+            if href.startswith('/'):
+                full_url = f"https://{base_url.split('/')[2]}{href}"
+            elif href.startswith('http'):
+                full_url = href
+            else:
+                continue
+                
+            # 重要キーワードを含むリンクを優先
+            relevance_score = 0
+            text_lower = text.lower()
+            
+            for keyword in keywords:
+                if keyword in text_lower:
+                    relevance_score += 2
+                if keyword in href.lower():
+                    relevance_score += 1
+            
+            # PDFファイルは特に重要
+            if href.endswith('.pdf'):
+                relevance_score += 3
+                
+            if relevance_score > 0:
+                subpages.append({
+                    'url': full_url,
+                    'text': text,
+                    'score': relevance_score
+                })
+        
+        # スコア順でソート
+        subpages.sort(key=lambda x: x['score'], reverse=True)
+        return [page['url'] for page in subpages[:5]]
+    
+    def explore_subpage(self, url, keywords, question):
+        """サブページの詳細探索"""
+        try:
+            response = self.session.get(url, timeout=15)
+            if response.status_code != 200:
+                return None
+                
+            # PDFファイルの場合
+            if url.endswith('.pdf'):
+                return self.extract_pdf_content(url, keywords, question)
+                
+            # HTMLページの場合
+            soup = BeautifulSoup(response.text, 'html.parser')
+            content = self.extract_relevant_content(soup, keywords, question)
+            
+            if content:
+                return {
+                    'url': url,
+                    'content': content,
+                    'source_type': self.classify_source_type(url),
+                    'depth': 'deep'
+                }
+                
+        except:
+            pass
+            
+        return None
+    
+    def extract_pdf_content(self, pdf_url, keywords, question):
+        """PDF文書からのコンテンツ抽出（簡易版）"""
+        try:
+            response = self.session.get(pdf_url, timeout=20)
+            if response.status_code == 200:
+                # PDF解析は複雑なので、まずはPDFの存在を記録
+                return {
+                    'url': pdf_url,
+                    'content': f"PDF文書が発見されました: {pdf_url.split('/')[-1]}",
+                    'source_type': 'PDF資料',
+                    'depth': 'document'
+                }
+        except:
+            pass
+        return None
+    
+    def discover_important_documents(self, domain, keywords, question):
+        """重要文書の自動発見"""
+        documents = []
+        
+        # よく使われる重要文書のパス
+        document_paths = [
+            '/ir/library/',
+            '/ir/finance/',
+            '/ir/brief/',
+            '/ir/plan/',
+            '/company/plan/',
+            '/sustainability/report/',
+            '/investor/',
+            '/finance/results/',
+        ]
+        
+        for path in document_paths:
+            try:
+                url = f"https://{domain}{path}"
+                response = self.session.get(url, timeout=10)
+                
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # PDFや重要文書へのリンクを発見
+                    for link in soup.find_all('a', href=True):
+                        href = link.get('href')
+                        text = link.get_text().strip()
+                        
+                        # 重要文書のキーワード
+                        if any(keyword in text for keyword in 
+                               ['決算', '有価証券', '中期計画', '事業報告', '説明資料', 'financial']):
+                            
+                            if href.startswith('/'):
+                                full_url = f"https://{domain}{href}"
+                            else:
+                                full_url = href
+                                
+                            documents.append({
+                                'url': full_url,
+                                'content': f"重要文書: {text}",
+                                'source_type': '重要文書',
+                                'depth': 'document'
+                            })
+                            
+                        if len(documents) >= 3:
+                            break
+                            
+            except:
+                continue
+                
+        return documents
+    
+    def extract_search_keywords(self, question):
+        """質問から検索キーワードを抽出"""
+        # 企業分析に関連するキーワードマッピング
+        keyword_mapping = {
+            "売上": ["売上", "revenue", "業績", "決算"],
+            "利益": ["利益", "profit", "営業利益", "当期純利益"],
+            "事業": ["事業", "business", "サービス", "事業内容"],
+            "採用": ["採用", "recruit", "新卒", "中途", "求人"],
+            "働き方": ["働き方", "work", "リモート", "制度", "福利厚生"],
+            "将来": ["将来", "future", "戦略", "計画", "ビジョン"],
+            "競合": ["競合", "競争", "ライバル", "シェア", "市場"],
+            "技術": ["技術", "technology", "IT", "DX", "システム"]
+        }
+        
+        question_lower = question.lower()
+        found_keywords = []
+        
+        for category, keywords in keyword_mapping.items():
+            for keyword in keywords:
+                if keyword in question_lower:
+                    found_keywords.extend(keywords)
+                    break
+        
+        return list(set(found_keywords)) if found_keywords else ["企業情報", "会社概要"]
+    
+    def extract_relevant_content(self, soup, keywords, question):
+        """HTMLから質問に関連するコンテンツを深度抽出"""
+        relevant_texts = []
+        
+        # より詳細な要素を対象に拡張
+        content_tags = ['h1', 'h2', 'h3', 'h4', 'p', 'div', 'li', 'span', 'td', 'th']
+        
+        for tag in soup.find_all(content_tags):
+            text = tag.get_text().strip()
+            
+            # テキスト長の条件を緩和（短い重要情報も取得）
+            if len(text) < 10 or len(text) > 800:
+                continue
+                
+            text_lower = text.lower()
+            question_lower = question.lower()
+            
+            relevance_score = 0
+            
+            # キーワードマッチング（重み付け強化）
+            for keyword in keywords:
+                keyword_lower = keyword.lower()
+                if keyword_lower in text_lower:
+                    # キーワードの完全一致
+                    if keyword_lower in text_lower.split():
+                        relevance_score += 3
+                    else:
+                        relevance_score += 2
+            
+            # 質問の単語マッチング
+            question_words = [w for w in question_lower.split() if len(w) > 2]
+            for word in question_words:
+                if word in text_lower:
+                    relevance_score += 1
+            
+            # 企業分析に重要な用語への追加スコア
+            important_terms = [
+                '売上', '利益', '業績', '決算', '戦略', '計画', '事業', 'ビジョン',
+                '強み', '特徴', '競合', '市場', '技術', 'DX', 'AI', 'サステナビリティ',
+                '採用', '人材', '働き方', '制度', '福利厚生', 'ミッション'
+            ]
+            
+            for term in important_terms:
+                if term in text:
+                    relevance_score += 1.5
+            
+            # 数値データがある場合は重要度UP
+            if any(char.isdigit() for char in text) and ('億' in text or '万' in text or '%' in text):
+                relevance_score += 2
+            
+            if relevance_score > 0:
+                relevant_texts.append({
+                    'text': text,
+                    'score': relevance_score
+                })
+        
+        # スコア順でソートして上位を返す（数を増加）
+        relevant_texts.sort(key=lambda x: x['score'], reverse=True)
+        
+        # より多くのコンテンツを含める（上位6件）
+        top_texts = [item['text'] for item in relevant_texts[:6]]
+        
+        return '\n\n'.join(top_texts) if top_texts else ""
+    
+    def classify_source_type(self, url):
+        """URLからソースタイプを分類"""
+        if '/ir/' in url:
+            return 'IR情報'
+        elif '/news/' in url:
+            return 'ニュース'
+        elif '/recruit/' in url:
+            return '採用情報'
+        elif '/company/' in url:
+            return '会社概要'
+        elif '/sustainability/' in url:
+            return 'サステナビリティ'
+        else:
+            return '企業情報'
+    
+    def generate_chat_response(self, question, analysis_data, company_info, chat_history):
+        """拡張チャット質問への回答生成（既存ソース活用）"""
+        
+        # Step 1: 基本的な分析結果をコンテキストとして整理
+        base_context = f"""
 分析対象企業: {company_info['company_name']}
 分析重点分野: {company_info['focus_area']}
 
@@ -348,42 +707,68 @@ class StreamlitCompanyResearcher:
 {json.dumps(analysis_data.get('business_analysis', {}), ensure_ascii=False, indent=2)}
 """
         
-        # チャット履歴の整理
+        # Step 2: 既存ソースから追加情報を検索
+        st.info("🔍 関連情報を企業サイトから検索中...")
+        additional_sources = self.search_existing_sources(question, {
+            'company_domain': company_info.get('company_domain')
+        })
+        
+        # 追加情報のコンテキスト作成
+        additional_context = ""
+        if additional_sources:
+            st.success(f"✅ {len(additional_sources)}件の追加情報を発見")
+            additional_context = "\n【追加収集情報】:\n"
+            for i, source in enumerate(additional_sources, 1):
+                additional_context += f"\n{i}. {source['source_type']} ({source['url']}):\n{source['content']}\n"
+        else:
+            st.info("ℹ️ 追加情報は見つかりませんでした。分析結果のみで回答します。")
+        
+        # Step 3: チャット履歴の整理
         history_context = ""
         if chat_history:
             history_context = "【過去の質疑応答】:\n"
-            for q, a in chat_history[-3:]:  # 直近3件のみ
+            for q, a in chat_history[-2:]:  # 直近2件のみ
                 history_context += f"Q: {q}\nA: {a}\n\n"
         
-        # 分析結果ベースのプロンプト（IR制約なし）
-        chat_prompt = f"""
+        # Step 4: 拡張プロンプト作成
+        enhanced_prompt = f"""
 あなたは企業分析の専門家です。以下のルールを守って回答してください：
 
 【回答ルール】
-1. 提供された分析結果のみを参照すること
-2. データにない情報は「分析データには含まれていません」と明記
-3. 具体的な根拠を示すこと
-4. 回答は200-300文字以内に収めること
-5. 推測的な表現は避け、分析結果に基づく事実のみ回答
+1. 提供された分析結果と追加収集情報を優先的に参照
+2. 情報源を明記：「分析結果によると」「企業サイトの○○情報によると」
+3. データにない情報は「提供された情報には含まれていません」と明記
+4. 回答は300-400文字程度で具体的に
+5. 情報の出典URL表示（追加情報がある場合）
 
-{context}
+{base_context}
+
+{additional_context}
 
 {history_context}
 
 現在の質問: {question}
 
-上記の分析結果のみを使用して回答してください。
+上記の情報を使用して、具体的で有用な回答を提供してください。
+情報源が分析結果か追加収集情報かを明記してください。
 """
         
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role": "user", "content": chat_prompt}],
+                messages=[{"role": "user", "content": enhanced_prompt}],
                 temperature=0.2,
-                max_tokens=300
+                max_tokens=500
             )
             
             answer = response.choices[0].message.content.strip()
+            
+            # 出典情報を追加
+            if additional_sources:
+                answer += "\n\n📚 **参照した追加情報:**"
+                for source in additional_sources:
+                    answer += f"\n• {source['source_type']}: {source['url']}"
+            
             return answer
             
         except Exception as e:
