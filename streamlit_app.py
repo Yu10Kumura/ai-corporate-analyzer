@@ -628,23 +628,17 @@ def main():
                 ["標準分析", "詳細分析"],
                 help="詳細分析では更に深い調査を実施します"
             )
-            
-            # 新規追加: IR情報URL
-            ir_top_url = st.text_input(
-                "📊 IR情報トップURL",
-                placeholder="例: https://toyota.co.jp/ir/",
-                help="指定しない場合は自動で推測されます（任意）"
-            )
         
         # 詳細設定（上級者向け）
         with st.expander("⚙️ 詳細設定", expanded=False):
             col3, col4 = st.columns(2)
             with col3:
-                max_crawl_depth = st.slider("探索深度", 1, 5, 4, help="IRページの探索深度")
                 date_range = st.selectbox("情報範囲", ["3年以内", "2年以内", "1年以内"], index=0)
-            with col4:
-                enable_hallucination_check = st.checkbox("ハルシネーション対策強化", value=True, help="回答の事実確認を強化します")
                 enable_chat = st.checkbox("分析後チャット機能", value=True, help="分析結果に関する追加質問が可能になります")
+            with col4:
+                # IR関連設定は非表示（将来の拡張用）
+                max_crawl_depth = 2  # 固定値
+                enable_hallucination_check = False  # IR機能無効時はOFF
         
         st.markdown("---")
         submitted = st.form_submit_button("🔍 AI分析開始", type="primary", use_container_width=True)
@@ -664,7 +658,6 @@ def main():
             "company_name": company_name,
             "website_url": website_url,
             "company_domain": company_domain,
-            "ir_top_url": ir_top_url,
             "focus_area": focus_area,
             "analysis_level": analysis_level,
             "max_crawl_depth": max_crawl_depth,
@@ -829,13 +822,13 @@ def main():
                             )
                             st.write(answer)
                     
-                    # 履歴に追加
+                    # 履歴に追加（セッション状態を更新）
                     st.session_state.chat_history.append((user_question, answer))
                 
                 # チャット履歴リセットボタン
                 if st.button("🗑️ チャット履歴をリセット"):
                     st.session_state.chat_history = []
-                    st.rerun()
+                    st.success("チャット履歴をリセットしました。")
         
         else:
             progress_bar.progress(0)
