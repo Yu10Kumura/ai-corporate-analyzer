@@ -693,41 +693,42 @@ class StreamlitCompanyResearcher:
         return max(0, min(100, score))  # 0-100の範囲に制限
     
     def search_external_sources(self, company_name, industry_keywords):
-        """SerpAPIを使用した外部信頼性ソースからの情報収集"""
+        """SerpAPIを使用した関連性の高い外部情報収集"""
         external_data = []
         
-        st.info("🌐 SerpAPIで外部信頼性ソースから業界情報を収集中...")
+        st.info("🌐 SerpAPIで関連性の高い業界情報を厳選収集中...")
         
         # SerpAPIキーを取得（新しいメソッドを使用）
         serpapi_key = self.get_serpapi_key()
         if not serpapi_key:
             return self.create_fallback_external_data(company_name, industry_keywords)
         
-        # 検索クエリの定義
+        # より具体的で関連性の高い検索クエリ
         search_queries = [
-            f"{company_name} 市場規模 業界分析 site:nikkei.com OR site:toyokeizai.net",
-            f"{company_name} 競合 業界 site:diamond.jp OR site:itmedia.co.jp", 
-            f"{industry_keywords} 業界 動向 市場 2024",
-            f"{company_name} 財務 業績"
+            f'"{company_name}" 市場規模 OR 業界シェア OR 売上 OR 業績 site:nikkei.com OR site:toyokeizai.net OR site:diamond.jp',
+            f'"{company_name}" 競合 OR ライバル OR 業界地位 -求人 -転職 site:nikkei.com OR site:itmedia.co.jp'
         ]
         
-        for i, query in enumerate(search_queries[:2], 1):  # 無料枠節約のため最大2クエリ
-            st.write(f"🔍 検索 {i}/2: {query[:50]}...")
+        for i, query in enumerate(search_queries, 1):
+            st.write(f"🔍 検索 {i}/{len(search_queries)}: {query[:60]}...")
             
             try:
                 results = self.search_with_serpapi(query, serpapi_key)
                 
                 if results and 'organic_results' in results:
-                    for result in results['organic_results'][:3]:  # 上位3件
+                    relevant_results = self.filter_relevant_results(results['organic_results'], company_name)
+                    
+                    for result in relevant_results[:2]:  # 関連性の高い上位2件のみ
                         external_data.append({
                             'title': result.get('title', ''),
                             'snippet': result.get('snippet', ''),
                             'url': result.get('link', ''),
                             'source': self.extract_domain(result.get('link', '')),
-                            'type': '外部記事'
+                            'type': '外部記事',
+                            'relevance_score': result.get('relevance_score', 0)
                         })
                     
-                    st.success(f"✅ {len(results['organic_results'][:3])}件の記事を発見")
+                    st.success(f"✅ 関連性の高い{len(relevant_results[:2])}件を選択")
                 else:
                     st.warning(f"⚠️ 検索 {i}: 結果なし")
                     
@@ -735,7 +736,51 @@ class StreamlitCompanyResearcher:
                 st.warning(f"⚠️ 検索 {i} エラー: {str(e)}")
                 continue
         
-        return external_data[:8]  # 最大8件の外部情報
+        # 関連性スコアでソート
+        external_data.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+        return external_data[:4]  # 最高品質の4件のみ
+    
+    def filter_relevant_results(self, results, company_name):
+        """検索結果の関連性フィルタリング"""
+        filtered_results = []
+        
+        # 除外キーワード（ノイズになりやすい情報）
+        exclude_keywords = ['求人', '転職', '採用', '面接', '就活', '新卒', '中途', '口コミ', 'indeed', 'リクナビ']
+        
+        # 重要キーワード（関連性判定用）
+        important_keywords = ['市場', '業界', '売上', '利益', '業績', 'シェア', '競合', '事業', '戦略', '分析']
+        
+        for result in results:
+            title = result.get('title', '').lower()
+            snippet = result.get('snippet', '').lower()
+            
+            # 除外条件チェック
+            if any(exclude in title or exclude in snippet for exclude in exclude_keywords):
+                continue
+            
+            # 企業名の言及チェック
+            if company_name.lower() not in title and company_name.lower() not in snippet:
+                continue
+            
+            # 関連性スコア計算
+            relevance_score = 0
+            for keyword in important_keywords:
+                if keyword in title:
+                    relevance_score += 2
+                if keyword in snippet:
+                    relevance_score += 1
+            
+            # 信頼できるソースかチェック
+            url = result.get('link', '')
+            if any(domain in url for domain in ['nikkei.com', 'toyokeizai.net', 'diamond.jp', 'itmedia.co.jp']):
+                relevance_score += 3
+            
+            # 最低関連性スコアの閾値
+            if relevance_score >= 3:
+                result['relevance_score'] = relevance_score
+                filtered_results.append(result)
+        
+        return sorted(filtered_results, key=lambda x: x['relevance_score'], reverse=True)
     
     def search_with_serpapi(self, query, api_key):
         """SerpAPIを使用した検索実行"""
@@ -1173,19 +1218,18 @@ JSON形式で以下の通り回答してください：
         return prompt
     
     def create_enhanced_research_prompt(self, company_info, external_data):
-        """マルチソース情報を統合した強化プロンプト作成"""
+        """企業公式情報優先の強化プロンプト作成"""
         
-        # 外部情報の整理
+        # 外部情報の整理（補足情報として）
         external_context = ""
         if external_data:
-            external_context = "\n【外部信頼性ソース情報】:\n"
+            external_context = "\n【補足：外部参考情報】:\n"
             for i, item in enumerate(external_data, 1):
                 external_context += f"{i}. 【{item['source']}】{item['title']}\n"
-                external_context += f"   概要: {item['snippet']}\n"
-                external_context += f"   URL: {item['url']}\n\n"
+                external_context += f"   概要: {item['snippet']}\n\n"
         
         prompt = f"""
-あなたは企業分析の専門家です。複数の情報ソースを統合して正確な分析を行ってください。
+あなたは企業分析の専門家です。企業公式情報を最優先とし、外部情報は補足として活用して正確な分析を行ってください。
 
 【分析対象企業】
 企業名: {company_info['company_name']}
@@ -1195,59 +1239,61 @@ JSON形式で以下の通り回答してください：
 {external_context}
 
 【CRITICAL分析ルール - 厳格に遵守】
-1. **情報ソースの明確な区別**:
-   - 企業公式情報: 「企業公式サイトによると」
-   - 外部記事情報: 「{external_data[0]['source'] if external_data else 'N/A'}によると」 
-   - 推定・一般論: 「推定値として」「一般的な業界動向として」
+1. **情報優先順位**:
+   - 第1優先: 企業公式サイト・IR資料の情報
+   - 第2優先: 企業開示の定量データ（売上、利益、市場シェア等）
+   - 第3優先: 外部記事は企業情報の補足・検証として活用
    
-2. **競合分析の精度向上**:
-   - 企業が公式に言及した競合のみ記載
-   - 外部記事で言及された競合は「外部分析によると」と明記
-   - 業界を正確に定義（不動産開発 vs 不動産情報サービス等）
+2. **定量分析の徹底**:
+   - 売上高、営業利益、従業員数等の具体的数値を重視
+   - 市場規模・シェアは公式開示データまたは外部調査データで明記
+   - 成長率、ROE等の財務指標を可能な限り含める
    
-3. **市場規模・数値の信頼性**:
-   - 外部調査レポートの数値は出典明記
-   - 企業開示の数値は「○○年○○資料による」
-   - 推定値は「推定」「約」等で明記
+3. **競合分析の精度**:
+   - 企業が公式に言及する競合を最優先
+   - 同一事業セグメントの企業を正確に特定
+   - 外部記事の競合情報は「参考情報として」で区別
    
-4. **業界定義の明確化**:
-   - 企業の実際の事業領域を正確に特定
-   - 関連業界との区別を明確に
+4. **事業領域の正確な定義**:
+   - 企業の主力事業を公式情報から正確に把握
+   - セグメント別売上構成比等の定量データを活用
+   - 類似業界との混同を避ける
    
-5. **情報不足時の対応**:
-   - 不明な情報は「確認できません」と正直に記載
-   - 推測が必要な場合は「推定」「可能性」で明記
+5. **信頼性の担保**:
+   - 不明な情報は「確認できません」と明記
+   - 推定は根拠を示し「推定」と明記
+   - 外部情報は出典を明記し、企業情報と区別
 
 JSON形式で以下の通り回答してください：
 
 ```json
 {{
   "evp": {{
-    "rewards": "具体的な報酬・待遇情報（情報源明記）",
-    "opportunity": "具体的な成長機会情報（情報源明記）", 
-    "organization": "具体的な組織・企業文化情報（情報源明記）",
-    "people": "具体的な人材・マネジメント情報（情報源明記）",
-    "work": "具体的な働き方・業務情報（情報源明記）"
+    "rewards": "企業公式情報に基づく報酬・待遇の具体的内容（年収、賞与、福利厚生等、数値含む）",
+    "opportunity": "公式に示されたキャリアパス・成長機会（具体的な制度・プログラム名含む）", 
+    "organization": "企業文化・組織体制の公式情報（従業員数、組織構造、企業理念等）",
+    "people": "人材育成・マネジメントの公式方針（研修制度、評価制度等の具体例）",
+    "work": "働き方・業務内容の公式情報（勤務制度、業務例、働き方改革の取組等）"
   }},
   "business_analysis": {{
-    "industry_market": "正確な業界定義と市場分析（外部ソース活用）",
-    "market_position": "正確な業界内ポジション（競合の正確な特定）",
-    "differentiation": "独自性・差別化要因（公式情報ベース）",
-    "business_portfolio": "事業ポートフォリオ分析（開示情報ベース）"
+    "industry_market": "正確な事業領域と市場環境（定量データ重視、外部調査は補足として活用）",
+    "market_position": "業界内ポジションと競合状況（シェア・売上規模等の定量比較重視）",
+    "differentiation": "差別化要因・競争優位性（企業公式の強み・特徴を中心に）",
+    "business_portfolio": "事業ポートフォリオ（セグメント別売上・利益等の定量分析重視）"
   }}
 }}
 ```
 
-各項目は**300-500文字で具体的に**記載し、以下を厳格に遵守してください：
+各項目は**400-600文字で具体的かつ定量的に**記載してください：
 
-【情報源区別の例】
-- 「企業公式サイトによると、SUUMO事業は...」
-- 「日本経済新聞の分析によると、不動産情報サービス市場は...」
-- 「業界一般論として、デジタル化が進んでいるが」
-- 「推定値として営業利益率は...」
-- 「公式開示情報では競合企業の明示的な言及は確認できません」
+【記載方針】
+- 企業公式情報を70%以上、外部情報は30%以下の比重
+- 定量データ（数値）を可能な限り含める
+- 情報源を明確に区別：「企業公式によると」「○○年度決算資料によると」「参考として外部調査では」
+- 推測・一般論は最小限に抑制
 
-**使用禁止**: 出典不明の具体的数値、根拠なき競合企業名、業界の誤分類
+**記載必須要素**: 具体的数値、公式制度名、正確な事業セグメント名、開示された競合企業名
+**使用禁止**: 根拠なき推測、出典不明の数値、不正確な競合企業名
 """
         return prompt
     
@@ -1279,45 +1325,51 @@ JSON形式で以下の通り回答してください：
         
         ir_data = []  # IR情報をクリア
         
-        # Step 2: 外部信頼性ソースからの情報収集（新機能）
-        st.info("🌐 Step 2: 外部信頼性ソースから業界・競合情報を収集中...")
+    def research_company(self, company_info):
+        """最適化された企業調査（企業サイト重視 + 外部情報補足）"""
+        
+        # Step 1: 企業公式サイトからの基幹情報収集
+        st.info("🏢 Step 1: 企業公式サイトから基幹情報を収集中...")
+        
+        # IR情報収集を一時無効化（処理時間短縮のため）
+        ir_data = []
+        
+        # Step 2: 企業基幹情報の分析・整理
+        st.info("📊 Step 2: 企業基幹情報の定量分析中...")
+        # 従来の企業サイト分析はここで実行される
+        
+        # Step 3: 外部情報による補足・検証（最小限）
+        st.info("🌐 Step 3: 外部情報による補足・検証中...")
         try:
             industry_keywords = company_info.get('focus_area', '').replace('分野', '').replace('領域', '')
             external_data = self.search_external_sources(company_info['company_name'], industry_keywords)
             
             if external_data:
-                st.success(f"✅ {len(external_data)}件の外部情報を収集しました")
+                st.success(f"✅ {len(external_data)}件の補足情報を収集")
                 
-                # 外部情報の詳細表示
-                with st.expander("🔍 収集した外部情報の詳細"):
+                # 外部情報の簡潔表示
+                with st.expander("🔍 補足情報（外部ソース）"):
                     for i, item in enumerate(external_data, 1):
-                        st.write(f"**{i}. {item['source']}** ({item['type']})")
-                        st.write(f"タイトル: {item['title']}")
-                        st.write(f"概要: {item['snippet'][:200]}...")
-                        st.write(f"URL: {item['url']}")
-                        st.write("---")
+                        st.write(f"**{i}. {item['source']}**: {item['title'][:80]}...")
             else:
-                st.warning("⚠️ 外部情報の収集ができませんでした")
-                st.info("💡 フォールバック: 既存の企業サイト情報とLLM知識で分析を継続します")
-                
-                # フォールバック情報を生成
-                external_data = self.create_fallback_external_data(company_info['company_name'], industry_keywords)
+                st.info("ℹ️ 外部補足情報なし - 企業公式情報で分析継続")
+                external_data = []
                 
         except Exception as e:
             st.warning(f"⚠️ 外部情報収集エラー: {str(e)}")
-            st.info("💡 フォールバック: 既存の企業サイト情報とLLM知識で分析を継続します")
-            external_data = self.create_fallback_external_data(company_info['company_name'], industry_keywords)
+            st.info("💡 企業公式情報を重視した分析を継続")
+            external_data = []
         
-        # Step 3: マルチソース統合分析
-        st.info("🧠 Step 3: マルチソース情報を統合してAI分析を実行中...")
+        # Step 4: 企業公式情報重視の統合分析
+        st.info("🧠 Step 4: 企業公式情報を重視した統合分析実行中...")
         prompt = self.create_enhanced_research_prompt(company_info, external_data)
-        temperature = 0.1  # より保守的な温度設定
+        temperature = 0.1  # 保守的で正確性重視
         
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "企業リサーチの専門家として、正確で具体的な情報をJSON形式で回答してください。"},
+                    {"role": "system", "content": "企業分析の専門家として、企業公式情報を最優先とし、定量データを重視した正確な分析をJSON形式で回答してください。"},
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=6000,
@@ -1336,13 +1388,10 @@ JSON形式で以下の通り回答してください：
             
             research_data = json.loads(json_content)
             
-            # IR関連の処理はスキップ
-            # 従来通りの分析結果のみ返却
-            
             return research_data
             
         except Exception as e:
-            st.error(f"AI調査中にエラーが発生しました: {e}")
+            st.error(f"AI分析中にエラーが発生しました: {e}")
             return None
     
     def save_results(self, company_info, research_data):
