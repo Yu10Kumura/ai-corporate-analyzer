@@ -714,6 +714,14 @@ def main():
             progress_bar.progress(100)
             status_text.text("✅ 分析完了！")
             
+            # 分析結果の構造確認
+            st.info("📝 分析結果構造:")
+            st.json({
+                "データキー": list(research_data.keys()),
+                "EVPキー": list(research_data.get('evp', {}).keys()) if research_data.get('evp') else "なし",
+                "ビジネス分析キー": list(research_data.get('business_analysis', {}).keys()) if research_data.get('business_analysis') else "なし"
+            })
+            
             # 結果表示
             st.success("🎉 AI分析が完了しました！")
             
@@ -747,9 +755,16 @@ def main():
                     "work": "💼 Work（働き方・業務）"
                 }
                 
-                for key, label in evp_labels.items():
-                    with st.expander(label, expanded=True):
-                        st.write(research_data['evp'][key])
+                # EVP分析結果の安全な表示
+                evp_data = research_data.get('evp', {})
+                if evp_data:
+                    for key, label in evp_labels.items():
+                        with st.expander(label, expanded=True):
+                            content = evp_data.get(key, "分析データが不足しています")
+                            st.write(content)
+                else:
+                    st.warning("EVP分析データが生成されませんでした。")
+                    st.json(research_data)  # デバッグ用
             
             with tab2:
                 st.subheader("🏆 ビジネス分析")
@@ -761,9 +776,16 @@ def main():
                     "business_portfolio": "🏗️ 事業ポートフォリオ分析"
                 }
                 
-                for key, label in business_labels.items():
-                    with st.expander(label, expanded=True):
-                        st.write(research_data['business_analysis'][key])
+                # ビジネス分析結果の安全な表示
+                business_data = research_data.get('business_analysis', {})
+                if business_data:
+                    for key, label in business_labels.items():
+                        with st.expander(label, expanded=True):
+                            content = business_data.get(key, "分析データが不足しています")
+                            st.write(content)
+                else:
+                    st.warning("ビジネス分析データが生成されませんでした。")
+                    st.json(research_data)  # デバッグ用
             
             with tab3:
                 st.subheader("📄 JSON形式の分析結果")
