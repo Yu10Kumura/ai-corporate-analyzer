@@ -511,30 +511,39 @@ JSON形式で以下の通り回答してください：
         return prompt
     
     def research_company(self, company_info):
-        """LLMに企業調査を依頼（IR情報収集＋ハルシネーション対策付き）"""
+        """LLMに企業調査を依頼（IR情報収集＋従来方式のハイブリッド）"""
         
-        # IR情報収集
+        # IR情報収集（オプション機能）
         ir_data = []
-        if company_info.get('company_domain'):
+        if company_info.get('company_domain') and company_info.get('enable_hallucination_check', True):
             st.info("🔍 IR情報を自動収集中...")
-            crawler = SmartIRCrawler(
-                company_info['company_domain'],
-                company_info.get('ir_top_url'),
-                max_depth=company_info.get('max_crawl_depth', 4),
-                date_limit_years=3
-            )
-            ir_data = crawler.crawl_with_intelligence()
-            
-            if ir_data:
-                st.success(f"✅ {len(ir_data)}件のIR情報を収集しました")
-            else:
-                st.warning("⚠️ IR情報の収集に失敗しました。既存の方法で分析を継続します。")
+            try:
+                crawler = SmartIRCrawler(
+                    company_info['company_domain'],
+                    company_info.get('ir_top_url'),
+                    max_depth=2,  # 深度を制限
+                    date_limit_years=3
+                )
+                ir_data = crawler.crawl_with_intelligence()
+                
+                if ir_data:
+                    st.success(f"✅ {len(ir_data)}件のIR情報を収集しました")
+                else:
+                    st.info("ℹ️ IR情報の収集に失敗しました。従来の分析方法を使用します。")
+            except Exception as e:
+                st.warning(f"⚠️ IR収集エラー: {str(e)} - 従来の分析方法を使用します。")
+                ir_data = []
         
-        # 制約付きプロンプト生成
-        if ir_data and company_info.get('enable_hallucination_check', True):
+        # プロンプト選択：IR情報がある場合は制約付き、ない場合は従来方式
+        if ir_data and len(ir_data) >= 2:  # 十分なIR情報がある場合のみ
+            st.info("📊 IR情報を活用した高精度分析を実行中...")
             prompt = self.create_constrained_prompt(company_info, ir_data)
+            temperature = 0.1
         else:
+            st.info("🔍 従来の汎用分析を実行中...")
             prompt = self.create_research_prompt(company_info)
+            temperature = 0.3
+            ir_data = []  # IR情報をクリア
         
         try:
             response = self.client.chat.completions.create(
@@ -544,7 +553,7 @@ JSON形式で以下の通り回答してください：
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=6000,
-                temperature=0.1 if company_info.get('enable_hallucination_check', True) else 0.3
+                temperature=temperature
             )
             
             content = response.choices[0].message.content.strip()
@@ -559,22 +568,23 @@ JSON形式で以下の通り回答してください：
             
             research_data = json.loads(json_content)
             
-            # ハルシネーション対策チェック
+            # ハルシネーション対策チェック（IR情報がある場合のみ）
             if ir_data and company_info.get('enable_hallucination_check', True):
                 is_valid, validation_message = self.validate_response_content(json_content, ir_data)
                 if not is_valid:
                     st.warning(f"⚠️ 回答検証: {validation_message}")
             
-            # IR情報をメタデータとして追加
-            research_data['ir_sources'] = [
-                {
-                    'url': item['url'],
-                    'title': item['title'],
-                    'date': item['date'].isoformat(),
-                    'importance': item['importance']
-                }
-                for item in ir_data[:5]
-            ]
+            # IR情報をメタデータとして追加（IR情報がある場合のみ）
+            if ir_data:
+                research_data['ir_sources'] = [
+                    {
+                        'url': item['url'],
+                        'title': item['title'],
+                        'date': item['date'].isoformat(),
+                        'importance': item['importance']
+                    }
+                    for item in ir_data[:5]
+                ]
             
             return research_data
             
