@@ -782,6 +782,115 @@ class StreamlitCompanyResearcher:
         
         return sorted(filtered_results, key=lambda x: x['relevance_score'], reverse=True)
     
+    def search_ir_documents_with_serpapi(self, company_name):
+        """SerpAPIを使用してIR関連文書を検索・収集"""
+        ir_data = []
+        
+        st.info("🔍 SerpAPIでIR関連資料を検索中...")
+        
+        # SerpAPIキーを取得
+        serpapi_key = self.get_serpapi_key()
+        if not serpapi_key:
+            st.warning("⚠️ SerpAPIキーが設定されていません")
+            return []
+        
+        # IR関連の検索クエリ（より具体的）
+        ir_search_queries = [
+            f'"{company_name}" 決算短信 OR 決算説明会 OR 有価証券報告書 filetype:pdf',
+            f'"{company_name}" 中期経営計画 OR 事業戦略 OR 業績 filetype:pdf',
+            f'"{company_name}" IR情報 OR 投資家向け OR 財務情報 site:*.co.jp'
+        ]
+        
+        for i, query in enumerate(ir_search_queries, 1):
+            st.write(f"🔍 IR検索 {i}/{len(ir_search_queries)}: {query[:60]}...")
+            
+            try:
+                results = self.search_with_serpapi(query, serpapi_key)
+                
+                if results and 'organic_results' in results:
+                    ir_results = self.filter_ir_documents(results['organic_results'], company_name)
+                    
+                    for result in ir_results[:2]:  # 関連性の高い上位2件
+                        ir_data.append({
+                            'title': result.get('title', ''),
+                            'snippet': result.get('snippet', ''),
+                            'url': result.get('link', ''),
+                            'source': self.extract_domain(result.get('link', '')),
+                            'document_type': self.classify_ir_document(result.get('title', ''), result.get('snippet', '')),
+                            'type': 'IR関連資料'
+                        })
+                    
+                    st.success(f"✅ {len(ir_results[:2])}件のIR関連資料を発見")
+                else:
+                    st.warning(f"⚠️ IR検索 {i}: 結果なし")
+                    
+            except Exception as e:
+                st.warning(f"⚠️ IR検索 {i} エラー: {str(e)}")
+                continue
+        
+        return ir_data[:6]  # 最大6件のIR関連情報
+    
+    def filter_ir_documents(self, results, company_name):
+        """検索結果からIR関連文書をフィルタリング"""
+        filtered_results = []
+        
+        # IR関連キーワード
+        ir_keywords = ['決算', '有価証券報告書', '中期経営計画', '業績', 'IR', '投資家', '財務', '売上', '利益', '戦略']
+        
+        # 除外キーワード
+        exclude_keywords = ['求人', '転職', '採用', '新卒', '口コミ', 'indeed', 'リクナビ', 'マイナビ']
+        
+        for result in results:
+            title = result.get('title', '').lower()
+            snippet = result.get('snippet', '').lower()
+            
+            # 除外条件チェック
+            if any(exclude in title or exclude in snippet for exclude in exclude_keywords):
+                continue
+            
+            # 企業名の言及チェック
+            if company_name.lower() not in title and company_name.lower() not in snippet:
+                continue
+            
+            # IR関連度スコア計算
+            ir_score = 0
+            for keyword in ir_keywords:
+                if keyword in title:
+                    ir_score += 3
+                if keyword in snippet:
+                    ir_score += 1
+            
+            # PDF文書はスコア追加
+            url = result.get('link', '')
+            if '.pdf' in url or 'filetype:pdf' in url:
+                ir_score += 2
+            
+            # 企業公式サイトはスコア追加
+            if company_name.lower() in url or '.co.jp' in url:
+                ir_score += 2
+            
+            # 最低IR関連スコアの閾値
+            if ir_score >= 3:
+                result['ir_score'] = ir_score
+                filtered_results.append(result)
+        
+        return sorted(filtered_results, key=lambda x: x['ir_score'], reverse=True)
+    
+    def classify_ir_document(self, title, snippet):
+        """IR文書の種類を分類"""
+        text = (title + ' ' + snippet).lower()
+        
+        if '決算短信' in text or '決算説明' in text:
+            return '決算短信・説明資料'
+        elif '有価証券報告書' in text or '10-k' in text:
+            return '有価証券報告書'
+        elif '中期経営計画' in text or '経営戦略' in text:
+            return '中期経営計画・戦略資料'
+        elif '業績' in text or '財務' in text:
+            return '業績・財務資料'
+        else:
+            return 'IR関連資料'
+    
     def search_with_serpapi(self, query, api_key):
         """SerpAPIを使用した検索実行"""
         url = "https://serpapi.com/search"
@@ -1478,31 +1587,26 @@ JSON形式で以下の通り回答してください：
         ir_data = []
         
         try:
-            crawler = SmartIRCrawler(
-                company_info['company_domain'],
-                company_info.get('ir_top_url'),
-                max_depth=3,  # より深くクロール
-                date_limit_years=3
-            )
-            ir_data = crawler.crawl_with_intelligence()
+            ir_data = self.search_ir_documents_with_serpapi(company_info['company_name'])
             
             if ir_data:
                 st.success(f"✅ {len(ir_data)}件のIR情報を収集しました")
                 
                 # IR情報の詳細表示
-                with st.expander("📊 収集したIR情報の詳細"):
+                with st.expander("📊 発見したIR関連情報の詳細"):
                     for i, item in enumerate(ir_data, 1):
                         st.write(f"**{i}. {item['title']}**")
-                        st.write(f"種類: {item.get('type', '不明')}")
-                        st.write(f"日付: {item.get('date', '不明')}")
-                        st.write(f"概要: {item.get('content', '')[:200]}...")
+                        st.write(f"種類: {item.get('document_type', 'IR関連資料')}")
+                        st.write(f"ソース: {item.get('source', '不明')}")
+                        st.write(f"概要: {item.get('snippet', '')[:200]}...")
+                        st.write(f"URL: {item.get('url', '')}")
                         st.write("---")
             else:
-                st.warning("⚠️ IR情報の自動収集ができませんでした")
+                st.warning("⚠️ IR関連情報の発見ができませんでした")
                 st.info("💡 企業公式サイトの基本情報で分析を継続します")
                 
         except Exception as e:
-            st.warning(f"⚠️ IR収集エラー: {str(e)}")
+            st.warning(f"⚠️ IR情報検索エラー: {str(e)}")
             st.info("💡 企業公式サイトの基本情報で分析を継続します")
             ir_data = []
         
