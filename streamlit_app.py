@@ -343,11 +343,13 @@ class StreamlitCompanyResearcher:
         """深度調査: 企業サイトの階層を深く探索して関連情報を収集"""
         company_domain = analysis_data.get('company_domain')
         if not company_domain:
+            st.error("❌ 企業ドメインが提供されていません")
             return []
         
         try:
             # 質問に基づいて検索キーワードを生成
             search_keywords = self.extract_search_keywords(question)
+            st.write(f"🔎 検索キーワード: {', '.join(search_keywords)}")
             
             st.info("🔍 企業サイトを深度調査中...")
             
@@ -364,20 +366,30 @@ class StreamlitCompanyResearcher:
             }
             
             for section_type, url_patterns in base_sections.items():
+                st.write(f"📂 {section_type.title()}セクションを調査中...")
                 section_sources = self.deep_explore_section(
                     company_domain, section_type, url_patterns, search_keywords, question
                 )
-                additional_sources.extend(section_sources)
+                if section_sources:
+                    st.write(f"✅ {len(section_sources)}件発見")
+                    additional_sources.extend(section_sources)
+                else:
+                    st.write("❌ 情報なし")
                 
                 # 最大12ソースまで（各セクション2-3個）
                 if len(additional_sources) >= 12:
                     break
             
             # Step 2: 重要文書の自動発見・取得
+            st.write("📄 重要文書を検索中...")
             document_sources = self.discover_important_documents(
                 company_domain, search_keywords, question
             )
-            additional_sources.extend(document_sources)
+            if document_sources:
+                st.write(f"📋 {len(document_sources)}件の重要文書を発見")
+                additional_sources.extend(document_sources)
+            else:
+                st.write("❌ 重要文書なし")
             
             return additional_sources[:15]  # 最大15ソース
             
@@ -708,10 +720,33 @@ class StreamlitCompanyResearcher:
 """
         
         # Step 2: 既存ソースから追加情報を検索
-        st.info("🔍 関連情報を企業サイトから検索中...")
+        st.info("🔍 企業サイトを深度調査中...")
+        
+        # デバッグ情報の表示
+        company_domain = company_info.get('company_domain')
+        if company_domain:
+            st.write(f"調査対象ドメイン: {company_domain}")
+        else:
+            st.warning("⚠️ 企業ドメインが見つかりません。基本分析結果のみで回答します。")
+        
         additional_sources = self.search_existing_sources(question, {
-            'company_domain': company_info.get('company_domain')
+            'company_domain': company_domain
         })
+        
+        # デバッグ: 詳細な調査結果を表示
+        if additional_sources:
+            st.success(f"✅ {len(additional_sources)}件の深度調査情報を発見")
+            with st.expander("🔍 深度調査詳細"):
+                for i, source in enumerate(additional_sources, 1):
+                    st.write(f"**{i}. {source.get('source_type', 'N/A')}**")
+                    st.write(f"URL: {source.get('url', 'N/A')}")
+                    st.write(f"深度: {source.get('depth', 'N/A')}")
+                    if source.get('content'):
+                        content_preview = source['content'][:200] + "..." if len(source['content']) > 200 else source['content']
+                        st.write(f"内容: {content_preview}")
+                    st.write("---")
+        else:
+            st.warning("⚠️ 深度調査で追加情報が見つかりませんでした")
         
         # 追加情報のコンテキスト作成
         additional_context = ""
@@ -730,27 +765,30 @@ class StreamlitCompanyResearcher:
             for q, a in chat_history[-2:]:  # 直近2件のみ
                 history_context += f"Q: {q}\nA: {a}\n\n"
         
-        # Step 4: 拡張プロンプト作成
+        # Step 4: 拡張プロンプト作成（ハルシネーション防止強化）
         enhanced_prompt = f"""
-あなたは企業分析の専門家です。以下のルールを守って回答してください：
+あなたは企業分析の専門家です。以下のルールを厳格に守って回答してください：
 
-【回答ルール】
-1. 提供された分析結果と追加収集情報を優先的に参照
-2. 情報源を明記：「分析結果によると」「企業サイトの○○情報によると」
-3. データにない情報は「提供された情報には含まれていません」と明記
-4. 回答は300-400文字程度で具体的に
-5. 情報の出典URL表示（追加情報がある場合）
+【CRITICAL回答ルール - 必ず遵守】
+1. 提供された情報のみを使用 - 推測や一般論は禁止
+2. 情報源を必ず明記：「分析結果によると」「企業サイトの○○によると」
+3. データにない情報は絶対に作らず「提供された情報には含まれていません」と明記
+4. 具体的な数値・日付・固有名詞は提供データに記載されているもののみ使用
+5. 回答は300-500文字程度で具体的に、但し根拠なき情報は一切含めない
 
+【提供データ】
 {base_context}
 
 {additional_context}
 
 {history_context}
 
-現在の質問: {question}
+【現在の質問】: {question}
 
-上記の情報を使用して、具体的で有用な回答を提供してください。
-情報源が分析結果か追加収集情報かを明記してください。
+【指示】
+上記の提供データのみを使用して、質問に対する具体的で有用な回答を提供してください。
+データに記載されていない情報は推測せず、「提供されたデータには含まれていません」と明記してください。
+情報源（分析結果または追加収集情報）を必ず明記してください。
 """
         
         try:
