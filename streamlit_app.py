@@ -1269,22 +1269,72 @@ JSON形式で以下の通り回答してください：
 ```json
 {{
   "evp": {{
-    "rewards": "企業公式情報に基づく報酬・待遇の具体的内容（年収、賞与、福利厚生等、数値含む）",
-    "opportunity": "公式に示されたキャリアパス・成長機会（具体的な制度・プログラム名含む）", 
-    "organization": "企業文化・組織体制の公式情報（従業員数、組織構造、企業理念等）",
-    "people": "人材育成・マネジメントの公式方針（研修制度、評価制度等の具体例）",
-    "work": "働き方・業務内容の公式情報（勤務制度、業務例、働き方改革の取組等）"
+    "rewards": {{
+      "factual_data": "企業公式に開示された報酬・待遇の具体的情報（年収、賞与、福利厚生制度名、数値データ等）",
+      "analytical_insights": "開示データに基づく分析・推定（業界比較、成長性評価等）",
+      "data_limitations": "情報が不足している項目・推定が必要な箇所"
+    }},
+    "opportunity": {{
+      "factual_data": "企業公式に明示されたキャリアパス・成長機会（制度名、プログラム内容、実績数値等）",
+      "analytical_insights": "制度・実績から読み取れる成長可能性の分析",
+      "data_limitations": "詳細が不明な制度・推定要素"
+    }},
+    "organization": {{
+      "factual_data": "企業文化・組織に関する公式情報（従業員数、組織構造、企業理念、制度等の具体的内容）",
+      "analytical_insights": "組織特性から推測される職場環境・企業文化の分析",
+      "data_limitations": "定性的情報や推測が必要な箇所"
+    }},
+    "people": {{
+      "factual_data": "人材育成・マネジメントの公式制度（研修制度名、評価制度、実績数値等）",
+      "analytical_insights": "制度から推測される人材戦略・成長環境の分析",
+      "data_limitations": "制度詳細や効果が不明な箇所"
+    }},
+    "work": {{
+      "factual_data": "働き方に関する公式情報（勤務制度、業務内容、働き方改革の具体的取組等）",
+      "analytical_insights": "制度・取組から推測されるワークライフバランス・業務特性",
+      "data_limitations": "実態や詳細が不明な制度・推定要素"
+    }}
   }},
   "business_analysis": {{
-    "industry_market": "正確な事業領域と市場環境（定量データ重視、外部調査は補足として活用）",
-    "market_position": "業界内ポジションと競合状況（シェア・売上規模等の定量比較重視）",
-    "differentiation": "差別化要因・競争優位性（企業公式の強み・特徴を中心に）",
-    "business_portfolio": "事業ポートフォリオ（セグメント別売上・利益等の定量分析重視）"
+    "industry_market": {{
+      "factual_data": "企業開示・外部調査による市場規模・業界動向の具体的数値・データ",
+      "analytical_insights": "データに基づく市場環境・成長性の分析・予測",
+      "data_limitations": "データが不足している領域・推定が必要な箇所"
+    }},
+    "market_position": {{
+      "factual_data": "企業開示・外部調査による市場シェア・売上規模等の具体的順位・数値",
+      "analytical_insights": "数値データに基づく競争力・ポジション分析",
+      "data_limitations": "比較データが不足している競合・推定要素"
+    }},
+    "differentiation": {{
+      "factual_data": "企業公式に明示された差別化要因・競争優位性（技術、サービス、実績等）",
+      "analytical_insights": "公式情報から推測される持続的競争優位性の分析",
+      "data_limitations": "競争優位性の持続性・効果が不明な箇所"
+    }},
+    "business_portfolio": {{
+      "factual_data": "企業開示によるセグメント別売上・利益・成長率等の具体的数値",
+      "analytical_insights": "数値データに基づく事業ポートフォリオ・収益構造の分析",
+      "data_limitations": "詳細な収益構造や将来性が不明な事業領域"
+    }}
   }}
 }}
 ```
 
-各項目は**400-600文字で具体的かつ定量的に**記載してください：
+各項目は以下の構造で**600-800文字**で具体的に記載してください：
+
+**📊 factual_data（300-400文字）:**
+- 企業公式開示・外部調査の具体的数値・制度名・実績
+- 出典を明記（「2024年3月期決算短信によると」「有価証券報告書によると」等）
+- 推測を含まない客観的事実のみ
+
+**🔍 analytical_insights（200-300文字）:**
+- factual_dataに基づく分析・評価・推測
+- 「これらのデータから推測すると」「業界水準と比較して」等で推測であることを明示
+- 根拠となるfactual_dataとの関連を明確に示す
+
+**⚠️ data_limitations（100文字程度）:**
+- 情報が不足している箇所・推測が必要な理由を簡潔に明記
+- 「詳細な制度内容は非開示」「業界比較データなし」等
 
 【記載方針】
 - 企業公式情報を70%以上、外部情報は30%以下の比重
@@ -1297,46 +1347,167 @@ JSON形式で以下の通り回答してください：
 """
         return prompt
     
+    def create_ir_integrated_prompt(self, company_info, ir_data, external_data):
+        """IR情報統合型の高精度プロンプト作成"""
+        
+        # IR情報の整理
+        ir_context = ""
+        if ir_data:
+            ir_context = "\n【重要：IR開示情報】:\n"
+            for i, item in enumerate(ir_data, 1):
+                ir_context += f"{i}. 【{item.get('type', 'IR資料')}】{item['title']}\n"
+                ir_context += f"   日付: {item.get('date', '不明')}\n"
+                ir_context += f"   内容抜粋: {item.get('content', '')[:300]}...\n\n"
+        
+        # 外部情報の整理（補足情報として）
+        external_context = ""
+        if external_data:
+            external_context = "\n【補足：外部参考情報】:\n"
+            for i, item in enumerate(external_data, 1):
+                external_context += f"{i}. 【{item['source']}】{item['title']}\n"
+                external_context += f"   概要: {item['snippet']}\n\n"
+        
+        prompt = f"""
+あなたは企業分析の専門家です。IR開示情報を最優先とし、事実と推測を明確に区別した構造化分析を行ってください。
+
+【分析対象企業】
+企業名: {company_info['company_name']}
+分析重点分野: {company_info['focus_area']}
+企業ドメイン: {company_info.get('company_domain', '不明')}
+
+{ir_context}
+{external_context}
+
+【CRITICAL分析ルール - 厳格に遵守】
+
+1. **情報優先順位（絶対遵守）**:
+   - 第1優先: IR開示情報（決算短信、有価証券報告書、中期経営計画等）
+   - 第2優先: 企業公式サイト情報
+   - 第3優先: 外部記事は補足・検証として最小限活用
+
+2. **事実と推測の厳格な区別**:
+   - factual_data: IR開示・企業公式の具体的数値・制度・実績のみ
+   - analytical_insights: データに基づく分析・推測（根拠を明示）
+   - data_limitations: 情報不足箇所の明確な指摘
+
+3. **必須記載要素**:
+   - 売上高、営業利益、従業員数等の具体的数値（最新期＋過去2-3年推移）
+   - セグメント別業績（売上構成比、利益率等）
+   - 競合他社との定量比較（シェア、規模等）
+   - 公式に開示された制度・取組の具体名
+
+4. **品質担保ルール**:
+   - 出典を必ず明記：「2024年3月期決算短信」「2023年有価証券報告書」等
+   - 推測は根拠を示し「～から推測される」「～と考えられる」で明示
+   - 不明な情報は「開示情報では確認できず」と正直に記載
+
+5. **記載分量・構造**:
+   - 各項目600-800文字（factual_data: 400文字、analytical_insights: 300文字、data_limitations: 100文字）
+   - 定量データを可能な限り多く含める
+   - 具体的制度名・プログラム名・数値を優先
+
+JSON形式で以下の通り回答してください：
+
+```json
+{{
+  "evp": {{
+    "rewards": {{
+      "factual_data": "IR開示・企業公式に明示された報酬・待遇の具体的情報（年収、賞与、福利厚生制度名、数値データ等）",
+      "analytical_insights": "開示データに基づく分析・推定（業界比較、成長性評価等）",
+      "data_limitations": "情報が不足している項目・推定が必要な箇所"
+    }},
+    "opportunity": {{
+      "factual_data": "IR開示・企業公式に明示されたキャリアパス・成長機会（制度名、プログラム内容、実績数値等）",
+      "analytical_insights": "制度・実績から読み取れる成長可能性の分析",
+      "data_limitations": "詳細が不明な制度・推定要素"
+    }},
+    "organization": {{
+      "factual_data": "IR開示・企業文化・組織に関する公式情報（従業員数、組織構造、企業理念、制度等の具体的内容）",
+      "analytical_insights": "組織特性から推測される職場環境・企業文化の分析",
+      "data_limitations": "定性的情報や推測が必要な箇所"
+    }},
+    "people": {{
+      "factual_data": "IR開示・人材育成・マネジメントの公式制度（研修制度名、評価制度、実績数値等）",
+      "analytical_insights": "制度から推測される人材戦略・成長環境の分析",
+      "data_limitations": "制度詳細や効果が不明な箇所"
+    }},
+    "work": {{
+      "factual_data": "IR開示・働き方に関する公式情報（勤務制度、業務内容、働き方改革の具体的取組等）",
+      "analytical_insights": "制度・取組から推測されるワークライフバランス・業務特性",
+      "data_limitations": "実態や詳細が不明な制度・推定要素"
+    }}
+  }},
+  "business_analysis": {{
+    "industry_market": {{
+      "factual_data": "IR開示・外部調査による市場規模・業界動向の具体的数値・データ",
+      "analytical_insights": "データに基づく市場環境・成長性の分析・予測",
+      "data_limitations": "データが不足している領域・推定が必要な箇所"
+    }},
+    "market_position": {{
+      "factual_data": "IR開示・外部調査による市場シェア・売上規模等の具体的順位・数値",
+      "analytical_insights": "数値データに基づく競争力・ポジション分析",
+      "data_limitations": "比較データが不足している競合・推定要素"
+    }},
+    "differentiation": {{
+      "factual_data": "IR開示・企業公式に明示された差別化要因・競争優位性（技術、サービス、実績等）",
+      "analytical_insights": "公式情報から推測される持続的競争優位性の分析",
+      "data_limitations": "競争優位性の持続性・効果が不明な箇所"
+    }},
+    "business_portfolio": {{
+      "factual_data": "IR開示によるセグメント別売上・利益・成長率等の具体的数値",
+      "analytical_insights": "数値データに基づく事業ポートフォリオ・収益構造の分析",
+      "data_limitations": "詳細な収益構造や将来性が不明な事業領域"
+    }}
+  }}
+}}
+```
+
+各項目は以下の構造で**600-800文字**で具体的に記載してください：
+
+**📊 factual_data（400文字）:** IR開示・企業公式の具体的数値・制度名・実績のみ
+**🔍 analytical_insights（300文字）:** factual_dataに基づく分析・評価・推測
+**⚠️ data_limitations（100文字）:** 情報不足箇所の明確な指摘
+"""
+        return prompt
+    
     def research_company(self, company_info):
-        """マルチソース企業調査（企業サイト + 外部信頼性ソース + LLM）"""
+        """Deep IR情報統合型企業調査（IR深層収集 + 外部情報補足）"""
         
-        # Step 1: 企業サイトからの一次情報収集（既存）
-        st.info("🔍 Step 1: 企業公式サイトから一次情報を収集中...")
-        
-        # IR情報収集を一時無効化
-        if False:  # IR機能を無効化
-            st.info("🔍 IR情報を自動収集中...")
-            try:
-                crawler = SmartIRCrawler(
-                    company_info['company_domain'],
-                    company_info.get('ir_top_url'),
-                    max_depth=2,
-                    date_limit_years=3
-                )
-                ir_data = crawler.crawl_with_intelligence()
-                
-                if ir_data:
-                    st.success(f"✅ {len(ir_data)}件のIR情報を収集しました")
-                else:
-                    st.info("ℹ️ IR情報の収集に失敗しました。従来の分析方法を使用します。")
-            except Exception as e:
-                st.warning(f"⚠️ IR収集エラー: {str(e)} - 従来の分析方法を使用します。")
-                ir_data = []
-        
-        ir_data = []  # IR情報をクリア
-        
-    def research_company(self, company_info):
-        """最適化された企業調査（企業サイト重視 + 外部情報補足）"""
-        
-        # Step 1: 企業公式サイトからの基幹情報収集
-        st.info("🏢 Step 1: 企業公式サイトから基幹情報を収集中...")
-        
-        # IR情報収集を一時無効化（処理時間短縮のため）
+        # Step 1: IR情報の深層収集（再有効化）
+        st.info("� Step 1: IR情報を深層収集中（決算書・有価証券報告書・中期経営計画）...")
         ir_data = []
         
-        # Step 2: 企業基幹情報の分析・整理
-        st.info("📊 Step 2: 企業基幹情報の定量分析中...")
-        # 従来の企業サイト分析はここで実行される
+        try:
+            crawler = SmartIRCrawler(
+                company_info['company_domain'],
+                company_info.get('ir_top_url'),
+                max_depth=3,  # より深くクロール
+                date_limit_years=3
+            )
+            ir_data = crawler.crawl_with_intelligence()
+            
+            if ir_data:
+                st.success(f"✅ {len(ir_data)}件のIR情報を収集しました")
+                
+                # IR情報の詳細表示
+                with st.expander("📊 収集したIR情報の詳細"):
+                    for i, item in enumerate(ir_data, 1):
+                        st.write(f"**{i}. {item['title']}**")
+                        st.write(f"種類: {item.get('type', '不明')}")
+                        st.write(f"日付: {item.get('date', '不明')}")
+                        st.write(f"概要: {item.get('content', '')[:200]}...")
+                        st.write("---")
+            else:
+                st.warning("⚠️ IR情報の自動収集ができませんでした")
+                st.info("💡 企業公式サイトの基本情報で分析を継続します")
+                
+        except Exception as e:
+            st.warning(f"⚠️ IR収集エラー: {str(e)}")
+            st.info("💡 企業公式サイトの基本情報で分析を継続します")
+            ir_data = []
+        
+        # Step 2: 企業公式サイトからの基幹情報収集
+        st.info("🏢 Step 2: 企業公式サイトから基幹情報を収集中...")
         
         # Step 3: 外部情報による補足・検証（最小限）
         st.info("🌐 Step 3: 外部情報による補足・検証中...")
@@ -1360,19 +1531,19 @@ JSON形式で以下の通り回答してください：
             st.info("💡 企業公式情報を重視した分析を継続")
             external_data = []
         
-        # Step 4: 企業公式情報重視の統合分析
-        st.info("🧠 Step 4: 企業公式情報を重視した統合分析実行中...")
-        prompt = self.create_enhanced_research_prompt(company_info, external_data)
-        temperature = 0.1  # 保守的で正確性重視
+        # Step 4: IR情報統合型の高精度分析
+        st.info("🧠 Step 4: IR情報を統合した高精度分析実行中...")
+        prompt = self.create_ir_integrated_prompt(company_info, ir_data, external_data)
+        temperature = 0.05  # より保守的で正確性重視
         
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "企業分析の専門家として、企業公式情報を最優先とし、定量データを重視した正確な分析をJSON形式で回答してください。"},
+                    {"role": "system", "content": "企業分析の専門家として、IR開示情報を最優先とし、事実と推測を明確に区別した構造化分析をJSON形式で回答してください。"},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=6000,
+                max_tokens=8000,  # より詳細な分析のため増量
                 temperature=temperature
             )
             
@@ -1387,6 +1558,14 @@ JSON形式で以下の通り回答してください：
                 json_content = content
             
             research_data = json.loads(json_content)
+            
+            # IR情報を分析結果に含める
+            if ir_data:
+                research_data['ir_summary'] = {
+                    'documents_analyzed': len(ir_data),
+                    'key_documents': [item['title'] for item in ir_data[:5]],
+                    'coverage_period': f"過去3年間のIR情報"
+                }
             
             return research_data
             
