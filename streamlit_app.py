@@ -106,70 +106,110 @@ class SmartIRCrawler:
         return score
     
     def discover_ir_links(self, start_url, depth=0):
-        """IRページから重要なリンクを発見"""
-        if depth > self.max_depth or not self.is_valid_domain(start_url):
+        """IRページから重要なリンクを発見（改善版）"""
+        if depth > self.max_depth:
             return []
         
         try:
-            response = self.session.get(start_url, timeout=10)
+            # URLの検証を緩和
+            if not start_url.startswith(('http://', 'https://')):
+                start_url = 'https://' + start_url
+            
+            st.info(f"🔍 探索中: {start_url}")
+            
+            response = self.session.get(start_url, timeout=15)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
             
             # ページコンテンツから日付抽出
             page_date = self.extract_date_from_content(response.text, start_url)
             
-            # 3年以内の情報のみ
-            if page_date < self.date_limit:
-                return []
-            
             # 重要度スコアリング
             importance_score = self.score_content_importance(response.text, start_url)
             
             discovered = [{
                 'url': start_url,
-                'content': response.text[:5000],  # 最初の5000文字
+                'content': response.text[:3000],  # 3000文字に短縮
                 'date': page_date,
                 'importance': importance_score,
-                'title': soup.title.string if soup.title else 'No Title'
+                'title': soup.title.string if soup.title else start_url.split('/')[-1]
             }]
             
-            # IR関連のリンクを探索
-            ir_keywords = ['ir', '決算', '業績', '財務', '投資家', 'investor']
+            # 基本的なIR情報があれば収集成功とみなす
+            if importance_score > 0:
+                st.success(f"✅ IR情報を発見: {soup.title.string if soup.title else start_url}")
             
-            for link in soup.find_all('a', href=True):
-                href = link.get('href')
-                if not href:
-                    continue
-                
-                full_url = urljoin(start_url, href)
-                
-                # 自社ドメインのみ
-                if not self.is_valid_domain(full_url):
-                    continue
-                
-                # IR関連キーワードを含むリンク
-                link_text = link.get_text().lower()
-                if any(keyword in link_text or keyword in href.lower() for keyword in ir_keywords):
-                    if depth < self.max_depth - 1:
+            # リンク探索は簡潔に
+            if depth < 2:  # 探索深度を制限
+                ir_keywords = ['決算', '業績', 'ir', 'investor']
+                for link in soup.find_all('a', href=True)[:20]:  # 最初の20個のリンクのみ
+                    href = link.get('href')
+                    if not href:
+                        continue
+                    
+                    full_url = urljoin(start_url, href)
+                    link_text = link.get_text().lower()
+                    
+                    if any(keyword in link_text or keyword in href.lower() for keyword in ir_keywords):
                         discovered.extend(self.discover_ir_links(full_url, depth + 1))
+                        if len(discovered) >= 5:  # 5件見つかったら終了
+                            break
             
             return discovered
             
+        except requests.exceptions.RequestException as e:
+            st.warning(f"⚠️ ネットワークエラー: {start_url} - {str(e)}")
+            return []
         except Exception as e:
-            st.warning(f"⚠️ URL探索エラー: {start_url} - {str(e)}")
+            st.warning(f"⚠️ 解析エラー: {start_url} - {str(e)}")
             return []
     
     def crawl_with_intelligence(self):
-        """スマートなIR情報収集"""
+        """スマートなIR情報収集（改善版）"""
         try:
-            # IR探索開始
-            all_content = self.discover_ir_links(self.ir_url)
+            st.info(f"🔍 IR情報探索を開始: {self.ir_url}")
             
-            # 重要度でソート
-            sorted_content = sorted(all_content, key=lambda x: x['importance'], reverse=True)
+            # 複数のIR URLパターンを試行
+            ir_patterns = [
+                self.ir_url,
+                f"https://{self.company_domain}/ir/",
+                f"https://{self.company_domain}/investor/",
+                f"https://{self.company_domain}/company/ir/",
+                f"https://ir.{self.company_domain}/",
+            ]
             
-            # 上位10件を返す
-            return sorted_content[:10]
+            all_content = []
+            
+            for url_pattern in ir_patterns:
+                if not url_pattern or len(all_content) >= 3:  # 3件見つかったら終了
+                    continue
+                    
+                try:
+                    content = self.discover_ir_links(url_pattern, 0)
+                    if content:
+                        all_content.extend(content)
+                        st.success(f"✅ {len(content)}件の情報を {url_pattern} から収集")
+                        break  # 成功したら他のパターンは試行しない
+                except:
+                    continue
+            
+            if not all_content:
+                st.warning("⚠️ IR情報が見つかりませんでした。一般的な企業分析を実行します。")
+                return []
+            
+            # 重要度でソートして重複除去
+            unique_content = {}
+            for item in all_content:
+                if item['url'] not in unique_content:
+                    unique_content[item['url']] = item
+            
+            sorted_content = sorted(unique_content.values(), key=lambda x: x['importance'], reverse=True)
+            
+            # 上位5件を返す
+            result = sorted_content[:5]
+            st.success(f"🎉 合計 {len(result)} 件のIR情報を収集しました")
+            
+            return result
             
         except Exception as e:
             st.error(f"❌ IR情報収集エラー: {str(e)}")
@@ -189,6 +229,22 @@ class StreamlitCompanyResearcher:
         # 結果保存ディレクトリ（本番環境では一時的）
         self.results_dir = Path('results')
         self.results_dir.mkdir(exist_ok=True)
+    
+    def extract_domain_from_url(self, url):
+        """URLからドメインを抽出"""
+        if not url:
+            return None
+        try:
+            if not url.startswith(('http://', 'https://')):
+                url = 'https://' + url
+            parsed = urlparse(url)
+            domain = parsed.netloc
+            # www. を除去
+            if domain.startswith('www.'):
+                domain = domain[4:]
+            return domain
+        except:
+            return None
     
     def validate_response_content(self, response, source_data):
         """ハルシネーション対策：回答内容の検証"""
@@ -576,15 +632,9 @@ def main():
                 help="分析対象の企業名を入力してください"
             )
             website_url = st.text_input(
-                "🌐 ホームページURL（任意）", 
+                "🌐 ホームページURL", 
                 placeholder="例: https://www.company.co.jp/",
-                help="企業の公式サイトURL（より詳細な分析が可能）"
-            )
-            # 新規追加: 企業ドメイン
-            company_domain = st.text_input(
-                "🔗 企業ドメイン",
-                placeholder="例: toyota.co.jp",
-                help="IRページの自動探索に使用されます（任意）"
+                help="企業の公式サイトURL（IR探索にも使用されます）"
             )
         
         with col2:
@@ -628,6 +678,7 @@ def main():
             return
         
         # 会社情報の準備
+        company_domain = researcher.extract_domain_from_url(website_url)
         company_info = {
             "company_name": company_name,
             "website_url": website_url,
