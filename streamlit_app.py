@@ -677,6 +677,9 @@ def main():
             st.error("🚨 企業名と分析重点分野は必須入力です。")
             return
         
+        # 調査オブジェクトを先に初期化
+        researcher = StreamlitCompanyResearcher()
+        
         # 会社情報の準備
         company_domain = researcher.extract_domain_from_url(website_url)
         company_info = {
@@ -692,9 +695,6 @@ def main():
             "enable_chat": enable_chat,
             "timestamp": datetime.now().isoformat()
         }
-        
-        # 調査実行
-        researcher = StreamlitCompanyResearcher()
         
         # プログレスバー付きで実行
         progress_bar = st.progress(0)
