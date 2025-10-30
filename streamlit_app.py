@@ -1991,26 +1991,50 @@ JSON形式で以下の通り回答してください：
         return min(100, int(total_score))
     
     def extract_structured_ir_data(self, company_name):
-        """Phase 2: IR情報の構造化抽出（新4段階システム用）"""
-        # SerpAPIでIR文書を検索
-        ir_queries = [
-            f"{company_name} 決算短信 2024",
-            f"{company_name} 有価証券報告書 2023", 
-            f"{company_name} IR 売上 営業利益",
-            f"{company_name} 従業員数 財務情報"
+        """Phase 2: IR情報の構造化抽出（精度向上版）"""
+        # 最新IR文書の優先検索クエリ（古い情報混入防止）
+        current_year = 2024
+        previous_year = 2023
+        
+        priority_ir_queries = [
+            f"{company_name} 決算短信 {current_year}年 3月期",
+            f"{company_name} 有価証券報告書 {previous_year}年度", 
+            f"{company_name} 四半期報告書 {current_year}",
+            f"{company_name} IR 最新 売上 営業利益 {current_year}",
+            f'site:ir.{company_name.lower()}.co.jp OR site:{company_name.lower()}.co.jp/ir 決算 {current_year}'
         ]
         
         all_ir_data = []
-        for query in ir_queries:
+        
+        # 優先度順に検索（最新情報優先）
+        for query in priority_ir_queries:
             search_results = self.serp_search(query)
-            all_ir_data.extend(search_results[:3])  # 各クエリから3件まで
+            
+            # 検索結果を年次でフィルタリング（2022年以降の情報のみ）
+            filtered_results = []
+            for result in search_results:
+                content = f"{result.get('title', '')} {result.get('snippet', '')}"
+                # 古い年次情報を除外
+                if any(old_year in content for old_year in ['2021', '2020', '2019', '2018']):
+                    continue
+                # 最新年次情報を優先
+                if any(recent_year in content for recent_year in [str(current_year), str(previous_year)]):
+                    result['priority'] = 'high'
+                else:
+                    result['priority'] = 'medium'
+                filtered_results.append(result)
+            
+            all_ir_data.extend(filtered_results[:2])  # 各クエリから最新2件
+        
+        # 優先度でソート（高優先度を先に処理）
+        all_ir_data.sort(key=lambda x: 0 if x.get('priority') == 'high' else 1)
         
         # 構造化データの初期化
         structured_ir = {
             'financial_data': {
-                'revenue': {'value': None, 'source': '', 'year': ''},
-                'operating_profit': {'value': None, 'source': '', 'year': ''},
-                'employees': {'value': None, 'source': '', 'year': ''}
+                'revenue': {'value': None, 'source': '', 'year': '', 'confidence': 0},
+                'operating_profit': {'value': None, 'source': '', 'year': '', 'confidence': 0},
+                'employees': {'value': None, 'source': '', 'year': '', 'confidence': 0}
             },
             'business_strategy': {
                 'key_strategies': [],
@@ -2020,77 +2044,108 @@ JSON形式で以下の通り回答してください：
             'data_quality': {
                 'ir_documents_found': len(all_ir_data),
                 'data_completeness': 0,
-                'reliability_score': 0
+                'reliability_score': 0,
+                'latest_year_coverage': False
             }
         }
         
-        # 財務データの抽出（正規表現パターン）
+        # 改良された財務データ抽出パターン（より精密）
         revenue_patterns = [
-            r'売上高[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*億円',
-            r'売上[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*億円',
-            r'revenue[：:\s]*([0-9,]+(?:\.[0-9]+)?)',
+            rf'(?:{current_year}|{previous_year})年.*?売上高[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*億円',
+            rf'売上高[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*億円.*?(?:{current_year}|{previous_year})',
+            r'売上収益[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*億円',
+            r'Revenue[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*billion',
         ]
         
         profit_patterns = [
-            r'営業利益[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*億円',
-            r'operating profit[：:\s]*([0-9,]+(?:\.[0-9]+)?)',
+            rf'(?:{current_year}|{previous_year})年.*?営業利益[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*億円',
+            rf'営業利益[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*億円.*?(?:{current_year}|{previous_year})',
+            r'Operating Income[：:\s]*([0-9,]+(?:\.[0-9]+)?)\s*billion',
         ]
         
         employee_patterns = [
-            r'従業員数[：:\s]*([0-9,]+)\s*[人名]',
+            rf'(?:{current_year}|{previous_year})年.*?従業員数[：:\s]*([0-9,]+)\s*[人名]',
+            rf'従業員数[：:\s]*([0-9,]+)\s*[人名].*?(?:{current_year}|{previous_year})',
             r'社員数[：:\s]*([0-9,]+)\s*[人名]',
         ]
         
-        # 各IR文書からデータ抽出
+        # 各IR文書からデータ抽出（優先度順）
         for item in all_ir_data:
             content = f"{item.get('title', '')} {item.get('snippet', '')}"
             source = item.get('source', 'IR文書')
+            priority = item.get('priority', 'medium')
             
-            # 売上高の抽出
-            if not structured_ir['financial_data']['revenue']['value']:
+            # 信頼度スコアを優先度に基づいて設定
+            confidence = 90 if priority == 'high' else 70
+            
+            # 年次情報の抽出
+            year_match = None
+            for year in [current_year, previous_year]:
+                if str(year) in content:
+                    year_match = str(year)
+                    structured_ir['data_quality']['latest_year_coverage'] = True
+                    break
+            
+            # 売上高の抽出（高信頼度のものを優先）
+            if not structured_ir['financial_data']['revenue']['value'] or confidence > structured_ir['financial_data']['revenue']['confidence']:
                 for pattern in revenue_patterns:
                     match = re.search(pattern, content)
                     if match:
                         structured_ir['financial_data']['revenue'] = {
                             'value': f"{match.group(1)}億円",
                             'source': source,
-                            'year': '2023-2024'
+                            'year': year_match or f'{previous_year}-{current_year}',
+                            'confidence': confidence
                         }
                         break
             
             # 営業利益の抽出
-            if not structured_ir['financial_data']['operating_profit']['value']:
+            if not structured_ir['financial_data']['operating_profit']['value'] or confidence > structured_ir['financial_data']['operating_profit']['confidence']:
                 for pattern in profit_patterns:
                     match = re.search(pattern, content)
                     if match:
                         structured_ir['financial_data']['operating_profit'] = {
                             'value': f"{match.group(1)}億円",
                             'source': source,
-                            'year': '2023-2024'
+                            'year': year_match or f'{previous_year}-{current_year}',
+                            'confidence': confidence
                         }
                         break
             
             # 従業員数の抽出
-            if not structured_ir['financial_data']['employees']['value']:
+            if not structured_ir['financial_data']['employees']['value'] or confidence > structured_ir['financial_data']['employees']['confidence']:
                 for pattern in employee_patterns:
                     match = re.search(pattern, content)
                     if match:
                         structured_ir['financial_data']['employees'] = {
                             'value': f"{match.group(1).replace(',', '')}人",
                             'source': source,
-                            'year': '2023-2024'
+                            'year': year_match or f'{previous_year}-{current_year}',
+                            'confidence': confidence
                         }
                         break
         
-        # データ完全性の計算
+        # データ完全性の計算（信頼度加重）
         data_fields = ['revenue', 'operating_profit', 'employees']
-        filled_fields = sum(1 for field in data_fields if structured_ir['financial_data'][field]['value'])
-        structured_ir['data_quality']['data_completeness'] = (filled_fields / len(data_fields)) * 100
+        weighted_completeness = 0
+        total_weight = 0
         
-        # 信頼性スコアの計算（IR文書数とデータ完全性に基づく）
-        doc_score = min(len(all_ir_data) * 10, 50)  # 最大50点
-        completeness_score = structured_ir['data_quality']['data_completeness'] * 0.5  # 最大50点
-        structured_ir['data_quality']['reliability_score'] = doc_score + completeness_score
+        for field in data_fields:
+            if structured_ir['financial_data'][field]['value']:
+                confidence = structured_ir['financial_data'][field]['confidence']
+                weighted_completeness += confidence
+                total_weight += 100
+            else:
+                total_weight += 100
+        
+        structured_ir['data_quality']['data_completeness'] = (weighted_completeness / total_weight) * 100 if total_weight > 0 else 0
+        
+        # 信頼性スコアの計算（最新情報重視）
+        base_score = min(len(all_ir_data) * 8, 40)  # 最大40点
+        completeness_score = structured_ir['data_quality']['data_completeness'] * 0.4  # 最大40点
+        latest_bonus = 20 if structured_ir['data_quality']['latest_year_coverage'] else 0  # 最新年次ボーナス
+        
+        structured_ir['data_quality']['reliability_score'] = base_score + completeness_score + latest_bonus
         
         return structured_ir
     
@@ -2228,19 +2283,15 @@ def main():
                 placeholder="例: トヨタ自動車、ソフトバンク、リクルート",
                 help="分析対象の企業名を入力してください"
             )
-            website_url = st.text_input(
-                "🌐 ホームページURL", 
-                placeholder="例: https://www.company.co.jp/",
-                help="企業の公式サイトURL（IR探索にも使用されます）"
-            )
+            
+            # 企業分析の範囲説明
+            st.info("🏢 **企業全体の包括的分析を実行します**")
+            st.write("- 事業ポートフォリオ全体の分析")
+            st.write("- 主力事業領域の詳細評価") 
+            st.write("- 業界内競合分析・市場ポジション")
+            st.write("- IR開示情報に基づく正確な財務分析")
         
         with col2:
-            focus_area = st.text_input(
-                "🎯 分析重点分野 *", 
-                placeholder="例: 新卒採用、エンジニア採用、中途採用",
-                help="どの分野に重点を置いて分析するかを指定"
-            )
-            
             # 分析レベル選択
             analysis_level = st.selectbox(
                 "📊 分析レベル",
@@ -2264,20 +2315,16 @@ def main():
     
     # フォーム送信時の処理
     if submitted:
-        if not company_name or not focus_area:
-            st.error("🚨 企業名と分析重点分野は必須入力です。")
+        if not company_name:
+            st.error("🚨 企業名は必須入力です。")
             return
         
         # 調査オブジェクトを先に初期化
         researcher = StreamlitCompanyResearcher()
         
-        # 会社情報の準備
-        company_domain = researcher.extract_domain_from_url(website_url)
+        # 会社情報の準備（企業分析に統一）
         company_info = {
             "company_name": company_name,
-            "website_url": website_url,
-            "company_domain": company_domain,
-            "focus_area": focus_area,
             "analysis_level": analysis_level,
             "max_crawl_depth": max_crawl_depth,
             "date_range": date_range,
