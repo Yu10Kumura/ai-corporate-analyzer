@@ -32,51 +32,125 @@ CONFIG = {
     'USER_AGENT': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
 }
 
-class IRDataCollector:
-    """IR情報収集システム（簡素化版）"""
+class SearchBasedIRCollector:
+    """SerpAPI検索ベースのIR情報収集システム"""
     
-    def __init__(self, company_domain):
-        self.company_domain = company_domain
+    def __init__(self, company_name):
+        self.company_name = company_name
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': CONFIG['USER_AGENT']})
     
-    def collect_basic_ir_info(self):
-        """基本的なIR情報を収集"""
-        try:
-            ir_patterns = [
-                f"https://{self.company_domain}/ir/",
-                f"https://{self.company_domain}/investor/",
-                f"https://ir.{self.company_domain}/"
-            ]
-            
-            collected_data = []
-            
-            for url in ir_patterns:
-                try:
-                    st.info(f"🔍 IR情報を探索中: {url}")
-                    response = self.session.get(url, timeout=10)
-                    
-                    if response.status_code == 200:
-                        soup = BeautifulSoup(response.text, 'html.parser')
-                        content = response.text[:2000]  # 最初の2000文字
-                        
-                        collected_data.append({
-                            'url': url,
-                            'content': content,
-                            'title': soup.title.string if soup.title else f"IR情報 - {self.company_domain}"
-                        })
-                        
-                        st.success(f"✅ IR情報を取得: {url}")
-                        break  # 1つ成功したら終了
-                        
-                except requests.exceptions.RequestException:
-                    continue
-            
-            return collected_data
-            
-        except Exception as e:
-            st.warning(f"⚠️ IR情報の収集中にエラー: {str(e)}")
+    def get_serpapi_key(self):
+        """SerpAPIキー取得（本番環境対応）"""
+        # Streamlit Cloud のSecrets機能を優先
+        if hasattr(st, 'secrets') and "SERPAPI_KEY" in st.secrets:
+            return st.secrets["SERPAPI_KEY"]
+        # 環境変数をフォールバック
+        elif os.getenv("SERPAPI_KEY"):
+            return os.getenv("SERPAPI_KEY")
+        else:
+            st.warning("⚠️ SerpAPI キーが設定されていません。IR検索機能は無効化されます。")
+            st.markdown("""
+            **SerpAPI設定方法（オプション）:**
+            - 1. https://serpapi.com でアカウント作成（無料枠月100回）
+            - 2. Streamlit Cloud: Secrets機能でSERPAPI_KEYを設定
+            - 3. ローカル実行: 環境変数でSERPAPI_KEYを設定
+            """)
+            return None
+    
+    def search_with_serpapi(self, query, api_key):
+        """SerpAPIを使用した検索実行"""
+        url = "https://serpapi.com/search"
+        params = {
+            "q": query,
+            "api_key": api_key,
+            "engine": "google",
+            "num": 5,  # 無料枠節約
+            "hl": "ja",  # 日本語
+            "gl": "jp"   # 日本地域
+        }
+        
+        response = requests.get(url, params=params, timeout=15)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.warning(f"SerpAPI Error: {response.status_code}")
+            return None
+    
+    def search_ir_information(self):
+        """IR関連情報を検索ベースで収集"""
+        serpapi_key = self.get_serpapi_key()
+        if not serpapi_key:
             return []
+        
+        # IR関連検索クエリ
+        search_queries = [
+            f"{self.company_name} IR 投資家向け情報",
+            f"{self.company_name} 決算 業績 財務",
+            f"{self.company_name} 有価証券報告書",
+            f"{self.company_name} 事業報告 年次報告書"
+        ]
+        
+        collected_data = []
+        
+        for query in search_queries:
+            try:
+                st.info(f"🔍 検索中: {query}")
+                search_results = self.search_with_serpapi(query, serpapi_key)
+                
+                if search_results and 'organic_results' in search_results:
+                    for result in search_results['organic_results'][:2]:  # 上位2件のみ
+                        url = result.get('link', '')
+                        title = result.get('title', '')
+                        snippet = result.get('snippet', '')
+                        
+                        # IR関連URLかチェック
+                        if self.is_ir_related_url(url, title):
+                            # Webページの内容を取得
+                            content = self.fetch_webpage_content(url)
+                            if content:
+                                collected_data.append({
+                                    'url': url,
+                                    'content': content[:2000],  # 2000文字まで
+                                    'title': title,
+                                    'snippet': snippet,
+                                    'search_query': query
+                                })
+                                st.success(f"✅ IR情報を取得: {title}")
+                
+                time.sleep(1)  # API制限回避
+                
+            except Exception as e:
+                st.warning(f"⚠️ 検索エラー: {str(e)}")
+                continue
+        
+        if collected_data:
+            st.info(f"📊 {len(collected_data)}件のIR情報を検索で収集しました")
+        else:
+            st.warning("⚠️ IR情報の検索ができませんでした。一般的な公開情報で分析を実行します。")
+        
+        return collected_data
+    
+    def is_ir_related_url(self, url, title):
+        """IR関連URLかどうかを判定"""
+        ir_keywords = ['ir', 'investor', '投資家', '決算', '業績', '財務', '有価証券', '年次報告']
+        url_lower = url.lower()
+        title_lower = title.lower()
+        
+        return any(keyword in url_lower or keyword in title_lower for keyword in ir_keywords)
+    
+    def fetch_webpage_content(self, url):
+        """Webページの内容を取得"""
+        try:
+            response = self.session.get(url, timeout=10)
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                text_content = soup.get_text()
+                return ' '.join(text_content.split())
+            return None
+        except:
+            return None
 
 class BusinessAnalyzer:
     """企業ビジネス分析システム（事業分析特化）"""
@@ -102,26 +176,28 @@ class BusinessAnalyzer:
         """統一された分析プロンプト（事業分析のみ）"""
         
         ir_content = ""
+        sources_list = []
         if ir_data:
             ir_content = "\n".join([
-                f"【IR情報】: {item['title']}\n内容: {item['content'][:800]}...\n"
+                f"【IR情報源】: {item['title']}\n出典URL: {item['url']}\n内容: {item['content'][:800]}...\n"
                 for item in ir_data[:3]
             ])
+            sources_list = [item['url'] for item in ir_data[:3]]
         
         prompt = f"""
-あなたは企業ビジネス分析の専門家です。以下の企業について、事業分析のみを実行してください。
+あなたは企業ビジネス分析の専門家です。以下の企業について、事業分析を実行してください。
 
 【分析対象企業】: {company_name}
 
 【利用可能な情報】:
-{ir_content if ir_content else "公開情報に基づく分析を実行"}
+{ir_content if ir_content else "一般的な公開情報に基づく分析を実行"}
 
 【重要制約】:
-1. EVP分析は実行しない
-2. 事業分析の4項目のみに特化
-3. 推測の場合は明確に「推定」と記載
-4. データがない場合は「情報不足」と明記
-5. 出典がある場合は必ず明記
+1. 事業分析の4項目のみに特化
+2. 推測の場合は明確に「推定」と記載
+3. データがない場合は「情報不足」と明記
+4. 情報源がある場合は具体的なURL出典を明記
+5. 各分析は800文字程度で詳細に記述
 
 【分析項目】:
 1. industry_market: 業界・市場分析（所属業界、市場規模、成長性）
@@ -142,23 +218,20 @@ class BusinessAnalyzer:
   "analysis_metadata": {{
     "company_name": "{company_name}",
     "analysis_date": "{datetime.now().strftime('%Y-%m-%d')}",
-    "data_sources": ["企業公式情報", "IR開示資料"],
-    "reliability_score": 85
+    "data_sources": {sources_list if sources_list else ["一般的な公開情報"]},
+    "ir_sources_count": {len(sources_list) if sources_list else 0},
+    "reliability_score": {90 if sources_list else 70}
   }}
 }}
 """
         return prompt
     
     def analyze_company(self, company_name, company_url=None):
-        """企業の事業分析を実行"""
+        """企業の事業分析を実行（検索ベース）"""
         
-        # IR情報収集
-        ir_data = []
-        if company_url:
-            domain = self._extract_domain(company_url)
-            if domain:
-                collector = IRDataCollector(domain)
-                ir_data = collector.collect_basic_ir_info()
+        # 検索ベースでIR情報収集
+        collector = SearchBasedIRCollector(company_name)
+        ir_data = collector.search_ir_information()
         
         # 分析プロンプト作成
         prompt = self.create_analysis_prompt(company_name, ir_data)
@@ -194,20 +267,6 @@ class BusinessAnalyzer:
             st.error(f"❌ AI分析エラー: {str(e)}")
             return None
     
-    def _extract_domain(self, url):
-        """URLからドメインを抽出"""
-        try:
-            if not url.startswith(('http://', 'https://')):
-                url = 'https://' + url
-            
-            parsed = urlparse(url)
-            domain = parsed.netloc
-            if domain.startswith('www.'):
-                domain = domain[4:]
-            return domain
-        except:
-            return None
-    
     def save_results(self, company_name, analysis_data):
         """分析結果を保存"""
         try:
@@ -218,8 +277,8 @@ class BusinessAnalyzer:
                 "analysis_results": analysis_data,
                 "generated_at": datetime.now().isoformat(),
                 "system_info": {
-                    "version": "2.0_business_focused",
-                    "analysis_type": "business_only"
+                    "version": "3.0_search_based",
+                    "analysis_type": "business_search_focused"
                 }
             }
             
@@ -244,29 +303,21 @@ def main():
         - 🏗️ **事業ポートフォリオ**: 主力事業・収益構造・事業領域
         
         **特徴:**
-        - EVP分析を廃止し、事業分析に特化
-        - IR情報に基づく客観的分析
-        - 800文字の詳細分析
-        - JSON形式での結果出力
+        - 🔍 SerpAPI検索ベースのIR情報自動収集
+        - 📊 IR資料・決算情報・有価証券報告書を自動検索
+        - 🎯 事業分析に特化（EVP分析は廃止）
+        - 📝 800文字の詳細分析
+        - 📄 JSON形式での結果出力
+        - 🔗 収集した情報源のURL出典明記
         """)
     
     # 入力フォーム
     with st.form("analysis_form"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            company_name = st.text_input(
-                "🏢 企業名 *", 
-                placeholder="例: トヨタ自動車、ソフトバンク、リクルート",
-                help="分析対象の企業名を入力してください"
-            )
-        
-        with col2:
-            company_url = st.text_input(
-                "🌐 企業URL（任意）",
-                placeholder="https://www.company.co.jp",
-                help="より詳細な分析のために企業URLを入力（任意）"
-            )
+        company_name = st.text_input(
+            "🏢 企業名 *", 
+            placeholder="例: トヨタ自動車、ソフトバンク、リクルート",
+            help="分析対象の企業名を入力してください（検索ベースでIR情報を自動収集します）"
+        )
         
         st.markdown("---")
         submitted = st.form_submit_button("🔍 事業分析開始", type="primary", use_container_width=True)
@@ -283,12 +334,12 @@ def main():
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        status_text.text("🔍 企業情報を収集中...")
+        status_text.text("🔍 検索ベースでIR情報を収集中...")
         progress_bar.progress(25)
         
         with st.spinner("🤖 AI分析中... (30-60秒程度お待ちください)"):
             progress_bar.progress(50)
-            analysis_result = analyzer.analyze_company(company_name, company_url)
+            analysis_result = analyzer.analyze_company(company_name)
             progress_bar.progress(80)
         
         if analysis_result:
@@ -382,7 +433,7 @@ def main():
     st.markdown(
         """
         <div style="text-align: center; color: #666;">
-            📊 企業ビジネス分析システム v2.0 | Powered by OpenAI GPT-4o-mini
+            � 企業ビジネス分析システム v3.0 (検索特化版) | Powered by OpenAI GPT-4o-mini + SerpAPI
         </div>
         """, 
         unsafe_allow_html=True
