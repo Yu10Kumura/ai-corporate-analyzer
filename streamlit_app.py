@@ -254,7 +254,7 @@ class BusinessAnalyzer:
 4. business_portfolio: 事業ポートフォリオ分析（主力事業、収益構造、事業領域）
 
 【出力形式】:
-以下のJSON形式で回答してください：
+必ず以下の正確なJSON形式で回答してください。JSONの構文エラーを避けるため、最後の項目にカンマを付けないでください：
 
 {{
   "business_analysis": {{
@@ -271,6 +271,11 @@ class BusinessAnalyzer:
     "reliability_score": {90 if sources_list else 70}
   }}
 }}
+
+【重要な注意事項】:
+- JSONの各オブジェクトの最後の項目には、カンマを付けないでください
+- 文字列内での引用符はエスケープしてください
+- 改行は文字列内に含めず、代わりに句読点で区切ってください
 """
         return prompt
     
@@ -323,11 +328,17 @@ class BusinessAnalyzer:
                         json_text = result_text[json_start:json_end]
                 
                 if json_text:
+                    # JSONの一般的な問題を修正
+                    # 不正なカンマを修正
+                    json_text = re.sub(r',(\s*[}\]])', r'\1', json_text)  # 末尾カンマを削除
+                    json_text = re.sub(r':\s*"([^"]*)"([^,}\]]*),', r': "\1\2",', json_text)  # 引用符の問題を修正
+                    
                     # JSONの妥当性をチェック
                     result = json.loads(json_text)
                     
                     # 必要なキーの存在を確認
                     if 'business_analysis' in result:
+                        st.success("✅ JSON解析成功")
                         return result
                     else:
                         st.warning("⚠️ AI応答の形式が予期されたものと異なります")
@@ -340,7 +351,13 @@ class BusinessAnalyzer:
                 
             except json.JSONDecodeError as e:
                 st.error(f"❌ JSON解析エラー: {str(e)}")
-                st.code(result_text)
+                
+                # 修正後のJSONテキストも表示
+                with st.expander("🔧 JSON修正の詳細", expanded=False):
+                    st.text("修正後のJSONテキスト:")
+                    st.code(json_text if 'json_text' in locals() else "JSONテキストが取得できませんでした")
+                    st.text("元のAI応答:")
+                    st.code(result_text)
                 return None
                 
         except Exception as e:
