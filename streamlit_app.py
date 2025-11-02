@@ -359,6 +359,31 @@ def main():
         - 🔗 収集した情報源のURL出典明記
         """)
     
+    # APIキー診断
+    with st.expander("🔧 APIキー診断", expanded=False):
+        if st.button("📋 APIキー設定状況を確認"):
+            # OpenAI APIキー確認
+            try:
+                analyzer = BusinessAnalyzer()
+                st.success("✅ OpenAI APIキー: 正常設定済み")
+            except:
+                st.error("❌ OpenAI APIキー: 未設定または無効")
+            
+            # SerpAPIキー確認
+            test_collector = SearchBasedIRCollector("テスト")
+            serpapi_key = test_collector.get_serpapi_key()
+            if serpapi_key:
+                st.success("✅ SerpAPI キー: 正常設定済み")
+                # 簡単なテスト検索
+                if st.button("🔍 SerpAPIテスト検索実行"):
+                    test_result = test_collector.search_with_serpapi("トヨタ", serpapi_key)
+                    if test_result and 'error' not in test_result:
+                        st.success("✅ SerpAPI: 検索テスト成功")
+                    else:
+                        st.error(f"❌ SerpAPI: 検索テスト失敗 - {test_result.get('error', 'Unknown error')}")
+            else:
+                st.warning("⚠️ SerpAPI キー: 未設定（検索機能は無効化されます）")
+    
     # 入力フォーム
     with st.form("analysis_form"):
         company_name = st.text_input(
