@@ -233,33 +233,19 @@ class BusinessAnalyzer:
             sources_list = [item['url'] for item in ir_data[:3]]
         
         prompt = f"""
-あなたは企業ビジネス分析の専門家です。以下の企業について、事業分析を実行してください。
+以下の企業について事業分析を実行し、必ず有効なJSON形式で回答してください。
 
-【分析対象企業】: {company_name}
+企業名: {company_name}
 
-【利用可能な情報】:
-{ir_content if ir_content else "一般的な公開情報に基づく分析を実行"}
+利用可能な情報:
+{ir_content if ir_content else "一般的な公開情報に基づく分析"}
 
-【重要制約】:
-1. 事業分析の4項目のみに特化
-2. 推測の場合は明確に「推定」と記載
-3. データがない場合は「情報不足」と明記
-4. 情報源がある場合は具体的なURL出典を明記
-5. 各分析は800文字程度で詳細に記述
-
-【分析項目】:
-1. industry_market: 業界・市場分析（所属業界、市場規模、成長性）
-2. market_position: 業界内ポジション（売上規模、市場シェア、競合比較）
-3. differentiation: 独自性・差別化要因（技術力、ブランド力、事業モデル）
-4. business_portfolio: 事業ポートフォリオ分析（主力事業、収益構造、事業領域）
-
-【出力形式】:
-必ず以下の正確なJSON形式で回答してください。JSONの構文エラーを避けるため、最後の項目にカンマを付けないでください：
+以下の正確なJSON形式で回答してください:
 
 {{
   "business_analysis": {{
-    "industry_market": "詳細な業界・市場分析（800文字程度）",
-    "market_position": "業界内ポジションの分析（800文字程度）", 
+    "industry_market": "業界・市場分析の詳細（800文字程度）",
+    "market_position": "業界内ポジションの分析（800文字程度）",
     "differentiation": "独自性・差別化要因の分析（800文字程度）",
     "business_portfolio": "事業ポートフォリオの分析（800文字程度）"
   }},
@@ -272,10 +258,7 @@ class BusinessAnalyzer:
   }}
 }}
 
-【重要な注意事項】:
-- JSONの各オブジェクトの最後の項目には、カンマを付けないでください
-- 文字列内での引用符はエスケープしてください
-- 改行は文字列内に含めず、代わりに句読点で区切ってください
+重要: JSON形式以外の文字は一切含めず、上記の構造に従って有効なJSONのみを出力してください。
 """
         return prompt
     
@@ -292,11 +275,22 @@ class BusinessAnalyzer:
         try:
             st.info("🤖 AI分析を実行中...")
             
+            # JSON形式を強制するための改善されたアプローチ
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "あなたは企業分析の専門家です。必ず有効なJSON形式でのみ回答してください。JSONの構文エラーは絶対に避けてください。"
+                    },
+                    {
+                        "role": "user", 
+                        "content": prompt
+                    }
+                ],
                 temperature=0.1,
-                max_tokens=4000
+                max_tokens=4000,
+                response_format={"type": "json_object"}  # JSON形式を強制
             )
             
             result_text = response.choices[0].message.content
@@ -308,61 +302,64 @@ class BusinessAnalyzer:
                 st.text(f"最初の200文字: {result_text[:200]}...")
                 st.text(f"最後の200文字: ...{result_text[-200:]}")
             
-            # JSON解析
+            # 直接JSON解析を試行
             try:
-                # より堅牢なJSON抽出ロジック
-                import re
+                result = json.loads(result_text)
                 
-                # JSONブロックを検索（複数の戦略を試行）
-                json_text = None
-                
-                # 戦略1: 完全なJSONブロックを検索
-                json_match = re.search(r'\{.*"business_analysis".*\}', result_text, re.DOTALL)
-                if json_match:
-                    json_text = json_match.group()
+                # 必要なキーの存在を確認
+                if 'business_analysis' in result:
+                    st.success("✅ JSON解析成功")
+                    return result
                 else:
-                    # 戦略2: 最初の{から最後の}まで
-                    json_start = result_text.find('{')
-                    json_end = result_text.rfind('}') + 1
-                    if json_start != -1 and json_end > json_start:
-                        json_text = result_text[json_start:json_end]
-                
-                if json_text:
-                    # JSONの一般的な問題を修正
-                    # 不正なカンマを修正
-                    json_text = re.sub(r',(\s*[}\]])', r'\1', json_text)  # 末尾カンマを削除
-                    json_text = re.sub(r':\s*"([^"]*)"([^,}\]]*),', r': "\1\2",', json_text)  # 引用符の問題を修正
+                    st.warning("⚠️ 必要なキー 'business_analysis' が見つかりません")
+                    # フォールバック: 基本構造を作成
+                    return self._create_fallback_result(company_name, result_text)
                     
-                    # JSONの妥当性をチェック
-                    result = json.loads(json_text)
-                    
-                    # 必要なキーの存在を確認
-                    if 'business_analysis' in result:
-                        st.success("✅ JSON解析成功")
-                        return result
-                    else:
-                        st.warning("⚠️ AI応答の形式が予期されたものと異なります")
-                        st.code(result_text)
-                        return None
-                else:
-                    st.warning("⚠️ AI応答からJSONを抽出できませんでした")
-                    st.code(result_text)
-                    return None
-                
             except json.JSONDecodeError as e:
-                st.error(f"❌ JSON解析エラー: {str(e)}")
-                
-                # 修正後のJSONテキストも表示
-                with st.expander("🔧 JSON修正の詳細", expanded=False):
-                    st.text("修正後のJSONテキスト:")
-                    st.code(json_text if 'json_text' in locals() else "JSONテキストが取得できませんでした")
-                    st.text("元のAI応答:")
-                    st.code(result_text)
-                return None
+                st.error(f"❌ 直接JSON解析エラー: {str(e)}")
+                # フォールバック処理
+                return self._create_fallback_result(company_name, result_text)
                 
         except Exception as e:
             st.error(f"❌ AI分析エラー: {str(e)}")
             return None
+    
+    def _create_fallback_result(self, company_name, raw_text):
+        """フォールバック: AIの応答からテキストベースで結果を生成"""
+        st.warning("⚠️ JSON解析に失敗しました。テキストベースで結果を生成します。")
+        
+        with st.expander("📄 生のAI応答", expanded=False):
+            st.text(raw_text)
+        
+        # 基本的な構造化データを作成
+        fallback_result = {
+            "business_analysis": {
+                "industry_market": f"{company_name}の業界・市場分析情報（AI応答の解析に失敗したため、詳細な分析を再実行してください）",
+                "market_position": f"{company_name}の市場ポジション情報（AI応答の解析に失敗したため、詳細な分析を再実行してください）",
+                "differentiation": f"{company_name}の独自性・差別化情報（AI応答の解析に失敗したため、詳細な分析を再実行してください）",
+                "business_portfolio": f"{company_name}の事業ポートフォリオ情報（AI応答の解析に失敗したため、詳細な分析を再実行してください）"
+            },
+            "analysis_metadata": {
+                "company_name": company_name,
+                "analysis_date": datetime.now().strftime('%Y-%m-%d'),
+                "data_sources": ["解析失敗により不明"],
+                "ir_sources_count": 0,
+                "reliability_score": 30,
+                "error_note": "JSON解析に失敗したため、フォールバック結果を表示しています"
+            }
+        }
+        
+        # 生のテキストから有用な情報を抽出を試行
+        if raw_text and len(raw_text) > 100:
+            # 簡単なテキスト分析で部分的に情報を抽出
+            lines = raw_text.split('\n')
+            useful_lines = [line.strip() for line in lines if line.strip() and len(line.strip()) > 20]
+            
+            if useful_lines:
+                combined_text = ' '.join(useful_lines[:5])  # 最初の5行を結合
+                fallback_result["business_analysis"]["industry_market"] = f"{company_name}に関する情報: {combined_text[:400]}..."
+        
+        return fallback_result
     
     def save_results(self, company_name, analysis_data):
         """分析結果を保存"""
