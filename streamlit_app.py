@@ -295,19 +295,51 @@ class BusinessAnalyzer:
             )
             
             result_text = response.choices[0].message.content
+            st.success("✅ AI応答を受信しました")
+            
+            # デバッグ情報（開発時のみ表示）
+            with st.expander("🔍 AI応答の詳細（デバッグ用）", expanded=False):
+                st.text(f"応答長: {len(result_text)}文字")
+                st.text(f"最初の200文字: {result_text[:200]}...")
+                st.text(f"最後の200文字: ...{result_text[-200:]}")
             
             # JSON解析
             try:
-                # JSON部分を抽出
-                json_start = result_text.find('{')
-                json_end = result_text.rfind('}') + 1
-                json_text = result_text[json_start:json_end]
+                # より堅牢なJSON抽出ロジック
+                import re
                 
-                result = json.loads(json_text)
-                return result
+                # JSONブロックを検索（複数の戦略を試行）
+                json_text = None
                 
-            except json.JSONDecodeError:
-                st.error("❌ AI応答のJSON解析に失敗しました")
+                # 戦略1: 完全なJSONブロックを検索
+                json_match = re.search(r'\{.*"business_analysis".*\}', result_text, re.DOTALL)
+                if json_match:
+                    json_text = json_match.group()
+                else:
+                    # 戦略2: 最初の{から最後の}まで
+                    json_start = result_text.find('{')
+                    json_end = result_text.rfind('}') + 1
+                    if json_start != -1 and json_end > json_start:
+                        json_text = result_text[json_start:json_end]
+                
+                if json_text:
+                    # JSONの妥当性をチェック
+                    result = json.loads(json_text)
+                    
+                    # 必要なキーの存在を確認
+                    if 'business_analysis' in result:
+                        return result
+                    else:
+                        st.warning("⚠️ AI応答の形式が予期されたものと異なります")
+                        st.code(result_text)
+                        return None
+                else:
+                    st.warning("⚠️ AI応答からJSONを抽出できませんでした")
+                    st.code(result_text)
+                    return None
+                
+            except json.JSONDecodeError as e:
+                st.error(f"❌ JSON解析エラー: {str(e)}")
                 st.code(result_text)
                 return None
                 
