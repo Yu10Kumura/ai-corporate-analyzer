@@ -7,7 +7,6 @@ EVP機能を削除し、企業のビジネス分析に特化したAIシステム
 import streamlit as st
 import os
 import json
-import datetime
 import time
 import requests
 from pathlib import Path
@@ -70,18 +69,44 @@ class SearchBasedIRCollector:
             "gl": "jp"   # 日本地域
         }
         
-        response = requests.get(url, params=params, timeout=15)
-        
-        if response.status_code == 200:
-            return response.json()
-        else:
-            st.warning(f"SerpAPI Error: {response.status_code}")
-            return None
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                result = response.json()
+                # エラーレスポンスをチェック
+                if 'error' in result:
+                    st.warning(f"SerpAPI Error: {result['error']}")
+                    return {'error': result['error']}
+                return result
+            elif response.status_code == 401:
+                st.error("❌ SerpAPIキーが無効です。Secrets設定を確認してください。")
+                return {'error': 'Invalid API Key'}
+            elif response.status_code == 429:
+                st.warning("⚠️ SerpAPI使用制限に達しました。しばらく待ってから再試行してください。")
+                return {'error': 'Rate limit exceeded'}
+            else:
+                st.warning(f"SerpAPI HTTP Error: {response.status_code}")
+                return {'error': f'HTTP {response.status_code}'}
+                
+        except requests.exceptions.Timeout:
+            st.warning("⚠️ SerpAPI接続タイムアウト")
+            return {'error': 'Timeout'}
+        except requests.exceptions.ConnectionError:
+            st.warning("⚠️ SerpAPIに接続できません")
+            return {'error': 'Connection Error'}
+        except requests.exceptions.RequestException as e:
+            st.warning(f"⚠️ SerpAPIリクエストエラー: {str(e)}")
+            return {'error': str(e)}
+        except Exception as e:
+            st.warning(f"⚠️ 予期しないエラー: {str(e)}")
+            return {'error': str(e)}
     
     def search_ir_information(self):
         """IR関連情報を検索ベースで収集"""
         serpapi_key = self.get_serpapi_key()
         if not serpapi_key:
+            st.info("🔍 SerpAPIキーが未設定のため、一般的な公開情報で分析を実行します")
             return []
         
         # IR関連検索クエリ
@@ -93,6 +118,7 @@ class SearchBasedIRCollector:
         ]
         
         collected_data = []
+        successful_searches = 0
         
         for query in search_queries:
             try:
@@ -100,6 +126,7 @@ class SearchBasedIRCollector:
                 search_results = self.search_with_serpapi(query, serpapi_key)
                 
                 if search_results and 'organic_results' in search_results:
+                    successful_searches += 1
                     for result in search_results['organic_results'][:2]:  # 上位2件のみ
                         url = result.get('link', '')
                         title = result.get('title', '')
@@ -118,17 +145,29 @@ class SearchBasedIRCollector:
                                     'search_query': query
                                 })
                                 st.success(f"✅ IR情報を取得: {title}")
+                elif search_results and 'error' in search_results:
+                    st.warning(f"⚠️ 検索エラー: {search_results.get('error', 'Unknown error')}")
+                else:
+                    st.debug(f"検索結果なし: {query}")
                 
                 time.sleep(1)  # API制限回避
                 
+            except requests.exceptions.Timeout:
+                st.warning(f"⚠️ 検索タイムアウト: {query}")
+                continue
+            except requests.exceptions.RequestException as e:
+                st.warning(f"⚠️ 検索リクエストエラー: {str(e)}")
+                continue
             except Exception as e:
-                st.warning(f"⚠️ 検索エラー: {str(e)}")
+                st.warning(f"⚠️ 予期しないエラー: {str(e)}")
                 continue
         
         if collected_data:
-            st.info(f"📊 {len(collected_data)}件のIR情報を検索で収集しました")
+            st.success(f"📊 {len(collected_data)}件のIR情報を検索で収集しました（{successful_searches}/{len(search_queries)}件の検索が成功）")
+        elif successful_searches > 0:
+            st.info("🔍 検索は成功しましたが、IR関連の有用な情報が見つかりませんでした。一般的な公開情報で分析を実行します。")
         else:
-            st.warning("⚠️ IR情報の検索ができませんでした。一般的な公開情報で分析を実行します。")
+            st.warning("⚠️ 検索に失敗しました。一般的な公開情報で分析を実行します。")
         
         return collected_data
     
@@ -148,8 +187,17 @@ class SearchBasedIRCollector:
                 soup = BeautifulSoup(response.text, 'html.parser')
                 text_content = soup.get_text()
                 return ' '.join(text_content.split())
+            else:
+                st.debug(f"HTTP {response.status_code}: {url}")
+                return None
+        except requests.exceptions.Timeout:
+            st.debug(f"タイムアウト: {url}")
             return None
-        except:
+        except requests.exceptions.RequestException as e:
+            st.debug(f"取得エラー {url}: {str(e)}")
+            return None
+        except Exception as e:
+            st.debug(f"予期しないエラー {url}: {str(e)}")
             return None
 
 class BusinessAnalyzer:
@@ -433,7 +481,7 @@ def main():
     st.markdown(
         """
         <div style="text-align: center; color: #666;">
-            � 企業ビジネス分析システム v3.0 (検索特化版) | Powered by OpenAI GPT-4o-mini + SerpAPI
+            🔍 企業ビジネス分析システム v3.0 (検索特化版) | Powered by OpenAI GPT-4o-mini + SerpAPI
         </div>
         """, 
         unsafe_allow_html=True
