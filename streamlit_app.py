@@ -151,7 +151,7 @@ class SearchBasedIRCollector:
                 elif search_results and 'error' in search_results:
                     st.warning(f"⚠️ 検索エラー: {search_results.get('error', 'Unknown error')}")
                 else:
-
+                    st.info(f"📊 検索結果: {query}")
                 
                 time.sleep(1)  # API制限回避
                 
