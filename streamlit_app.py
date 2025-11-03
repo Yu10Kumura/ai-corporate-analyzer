@@ -151,7 +151,7 @@ class SearchBasedIRCollector:
                 elif search_results and 'error' in search_results:
                     st.warning(f"⚠️ 検索エラー: {search_results.get('error', 'Unknown error')}")
                 else:
-                    st.debug(f"検索結果なし: {query}")
+
                 
                 time.sleep(1)  # API制限回避
                 
@@ -207,16 +207,16 @@ class SearchBasedIRCollector:
                 # 文字数制限を適用
                 return content[:CONFIG['MAX_CONTENT_LENGTH']]
             else:
-                st.debug(f"HTTP {response.status_code}: {url}")
+
                 return None
         except requests.exceptions.Timeout:
-            st.debug(f"タイムアウト: {url}")
+
             return None
         except requests.exceptions.RequestException as e:
-            st.debug(f"取得エラー {url}: {str(e)}")
+
             return None
         except Exception as e:
-            st.debug(f"予期しないエラー {url}: {str(e)}")
+
             return None
     
     def extract_pdf_content(self, pdf_content):
@@ -244,7 +244,7 @@ class SearchBasedIRCollector:
                 return ' '.join(text.split())[:CONFIG['MAX_CONTENT_LENGTH']]
                 
         except Exception as e:
-            st.debug(f"PDF読み取りエラー: {str(e)}")
+
             return None
     
     def crawl_subpages(self, soup, base_url, current_depth):
@@ -376,7 +376,7 @@ class BusinessAnalyzer:
                     }
                 ],
                 temperature=0.1,
-                max_tokens=12000,
+                max_completion_tokens=12000,  # GPT-5対応パラメータ
                 response_format={"type": "json_object"}  # JSON形式を強制
             )
             
