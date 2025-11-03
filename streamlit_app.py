@@ -14,6 +14,9 @@ from openai import OpenAI
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from datetime import datetime, timedelta
+import PyPDF2
+import pdfplumber
+import io
 
 # ページ設定
 st.set_page_config(
@@ -25,9 +28,10 @@ st.set_page_config(
 
 # 設定定数
 CONFIG = {
-    'MAX_CRAWL_DEPTH': 2,
+    'MAX_CRAWL_DEPTH': 4,  # 3-4階層まで拡張
     'DATE_LIMIT_YEARS': 3,
     'MAX_SOURCES': 10,
+    'MAX_CONTENT_LENGTH': 100000,  # 2000から100000文字に拡張
     'USER_AGENT': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
 }
 
@@ -41,21 +45,20 @@ class SearchBasedIRCollector:
     
     def get_serpapi_key(self):
         """SerpAPIキー取得（本番環境対応）"""
-        # Streamlit Cloud のSecrets機能を優先
+        # 環境変数を最優先でチェック
+        env_key = os.getenv("SERPAPI_KEY")
+        if env_key and len(env_key) > 10:
+            return env_key
+        
+        # Streamlit Cloud のSecrets機能
         if hasattr(st, 'secrets') and "SERPAPI_KEY" in st.secrets:
-            return st.secrets["SERPAPI_KEY"]
-        # 環境変数をフォールバック
-        elif os.getenv("SERPAPI_KEY"):
-            return os.getenv("SERPAPI_KEY")
-        else:
-            st.warning("⚠️ SerpAPI キーが設定されていません。IR検索機能は無効化されます。")
-            st.markdown("""
-            **SerpAPI設定方法（オプション）:**
-            - 1. https://serpapi.com でアカウント作成（無料枠月100回）
-            - 2. Streamlit Cloud: Secrets機能でSERPAPI_KEYを設定
-            - 3. ローカル実行: 環境変数でSERPAPI_KEYを設定
-            """)
-            return None
+            key = st.secrets["SERPAPI_KEY"]
+            # テスト値や無効な値でないことを確認
+            if key and key != "your-actual-serpapi-key-here" and len(key) > 10 and not key.startswith("test"):
+                return key
+        
+        # SerpAPI未設定時の明確な通知（エラーではなく情報）
+        return None
     
     def search_with_serpapi(self, query, api_key):
         """SerpAPIを使用した検索実行"""
@@ -106,7 +109,7 @@ class SearchBasedIRCollector:
         """IR関連情報を検索ベースで収集"""
         serpapi_key = self.get_serpapi_key()
         if not serpapi_key:
-            st.info("🔍 SerpAPIキーが未設定のため、一般的な公開情報で分析を実行します")
+            st.info("🔍 SerpAPIキーが未設定のため、OpenAI APIの知識ベースで分析を実行します")
             return []
         
         # IR関連検索クエリ
@@ -134,12 +137,12 @@ class SearchBasedIRCollector:
                         
                         # IR関連URLかチェック
                         if self.is_ir_related_url(url, title):
-                            # Webページの内容を取得
+                            # Webページの内容を取得（拡張版）
                             content = self.fetch_webpage_content(url)
                             if content:
                                 collected_data.append({
                                     'url': url,
-                                    'content': content[:2000],  # 2000文字まで
+                                    'content': content[:CONFIG['MAX_CONTENT_LENGTH']],  # 100000文字まで拡張
                                     'title': title,
                                     'snippet': snippet,
                                     'search_query': query
@@ -172,21 +175,37 @@ class SearchBasedIRCollector:
         return collected_data
     
     def is_ir_related_url(self, url, title):
-        """IR関連URLかどうかを判定"""
-        ir_keywords = ['ir', 'investor', '投資家', '決算', '業績', '財務', '有価証券', '年次報告']
+        """IR関連URLかどうかを判定（PDF含む）"""
+        ir_keywords = ['ir', 'investor', '投資家', '決算', '業績', '財務', '有価証券', '年次報告', 
+                      'pdf', '報告書', 'report', 'financial', 'annual', 'quarterly']
         url_lower = url.lower()
         title_lower = title.lower()
         
         return any(keyword in url_lower or keyword in title_lower for keyword in ir_keywords)
     
-    def fetch_webpage_content(self, url):
-        """Webページの内容を取得"""
+    def fetch_webpage_content(self, url, depth=0):
+        """Webページの内容を取得（PDF対応・多階層クロール）"""
         try:
             response = self.session.get(url, timeout=10)
             if response.status_code == 200:
+                content_type = response.headers.get('content-type', '').lower()
+                
+                # PDF処理
+                if 'pdf' in content_type:
+                    return self.extract_pdf_content(response.content)
+                
+                # HTML処理
                 soup = BeautifulSoup(response.text, 'html.parser')
                 text_content = soup.get_text()
-                return ' '.join(text_content.split())
+                content = ' '.join(text_content.split())
+                
+                # 多階層クロール: 深度が制限内でリンクを収集
+                if depth < CONFIG['MAX_CRAWL_DEPTH']:
+                    sub_content = self.crawl_subpages(soup, url, depth + 1)
+                    content += sub_content
+                
+                # 文字数制限を適用
+                return content[:CONFIG['MAX_CONTENT_LENGTH']]
             else:
                 st.debug(f"HTTP {response.status_code}: {url}")
                 return None
@@ -199,6 +218,65 @@ class SearchBasedIRCollector:
         except Exception as e:
             st.debug(f"予期しないエラー {url}: {str(e)}")
             return None
+    
+    def extract_pdf_content(self, pdf_content):
+        """PDFからテキストを抽出"""
+        try:
+            # pdfplumberを優先使用（レイアウト情報を保持）
+            with io.BytesIO(pdf_content) as pdf_stream:
+                with pdfplumber.open(pdf_stream) as pdf:
+                    text = ""
+                    for page in pdf.pages[:20]:  # 最初の20ページまで
+                        if page.extract_text():
+                            text += page.extract_text() + "\n"
+                    
+                    if text.strip():
+                        return ' '.join(text.split())[:CONFIG['MAX_CONTENT_LENGTH']]
+            
+            # フォールバック: PyPDF2を使用
+            with io.BytesIO(pdf_content) as pdf_stream:
+                pdf_reader = PyPDF2.PdfReader(pdf_stream)
+                text = ""
+                for page_num in range(min(len(pdf_reader.pages), 20)):
+                    page = pdf_reader.pages[page_num]
+                    text += page.extract_text() + "\n"
+                
+                return ' '.join(text.split())[:CONFIG['MAX_CONTENT_LENGTH']]
+                
+        except Exception as e:
+            st.debug(f"PDF読み取りエラー: {str(e)}")
+            return None
+    
+    def crawl_subpages(self, soup, base_url, current_depth):
+        """サブページを再帰的にクロール"""
+        if current_depth >= CONFIG['MAX_CRAWL_DEPTH']:
+            return ""
+        
+        sub_content = ""
+        ir_links = []
+        
+        # IR関連リンクを抽出
+        for link in soup.find_all('a', href=True):
+            href = link.get('href')
+            if href:
+                full_url = urljoin(base_url, href)
+                link_text = link.get_text().strip()
+                
+                # IR関連キーワードをチェック
+                if self.is_ir_related_url(full_url, link_text) and full_url not in ir_links:
+                    ir_links.append(full_url)
+                    
+                    if len(ir_links) >= 5:  # 各階層で最大5リンク
+                        break
+        
+        # サブページの内容を取得
+        for link_url in ir_links:
+            time.sleep(0.5)  # レート制限
+            subcontent = self.fetch_webpage_content(link_url, current_depth)
+            if subcontent:
+                sub_content += f"\n[サブページ {current_depth}階層]: {subcontent[:5000]}"  # 各サブページ5000文字まで
+        
+        return sub_content
 
 class BusinessAnalyzer:
     """企業ビジネス分析システム（事業分析特化）"""
@@ -227,7 +305,7 @@ class BusinessAnalyzer:
         sources_list = []
         if ir_data:
             ir_content = "\n".join([
-                f"【IR情報源】: {item['title']}\n出典URL: {item['url']}\n内容: {item['content'][:800]}...\n"
+                f"【IR情報源】: {item['title']}\n出典URL: {item['url']}\n内容: {item['content'][:2400]}...\n"
                 for item in ir_data[:3]
             ])
             sources_list = [item['url'] for item in ir_data[:3]]
@@ -238,27 +316,36 @@ class BusinessAnalyzer:
 企業名: {company_name}
 
 利用可能な情報:
-{ir_content if ir_content else "一般的な公開情報に基づく分析"}
+{ir_content if ir_content else f"【{company_name}】の一般的な公開情報・知識ベースに基づく包括的分析"}
+
+【重要な分析要求】:
+- 各項目で2400文字程度の詳細分析を実施してください
+- あなたの知識ベースから具体的な数値データ（売上、利益、従業員数、市場シェア等）を必ず含めてください
+- 競合他社との比較を定量的に行ってください
+- 過去3年間のトレンド分析を含めてください
+- 将来予測と戦略的示唆を含めてください
+- IR情報が無い場合でも、あなたの知識から最新の企業情報を活用してください
 
 以下の正確なJSON形式で回答してください:
 
 {{
   "business_analysis": {{
-    "industry_market": "業界・市場分析の詳細（800文字程度）",
-    "market_position": "業界内ポジションの分析（800文字程度）",
-    "differentiation": "独自性・差別化要因の分析（800文字程度）",
-    "business_portfolio": "事業ポートフォリオの分析（800文字程度）"
+    "industry_market": "業界・市場分析の詳細（2400文字程度）- 市場規模、成長率、主要プレイヤー、トレンド、将来予測を含む包括的分析。具体的な数値と統計データを含めること。",
+    "market_position": "業界内ポジションの分析（2400文字程度）- 市場シェア、売上ランキング、競合比較、強み・弱みの定量的分析。売上高、利益率、従業員数等の具体的データを含めること。",
+    "differentiation": "独自性・差別化要因の分析（2400文字程度）- 技術力、ブランド力、ビジネスモデル、特許、人材等の競争優位性の詳細分析。具体的な事例と数値を含めること。",
+    "business_portfolio": "事業ポートフォリオの分析（2400文字程度）- 事業セグメント別売上、利益率、成長性、リスク分析、今後の戦略方向性。具体的な事業別数値と将来予測を含めること。"
   }},
   "analysis_metadata": {{
     "company_name": "{company_name}",
     "analysis_date": "{datetime.now().strftime('%Y-%m-%d')}",
-    "data_sources": {sources_list if sources_list else ["一般的な公開情報"]},
+    "data_sources": {sources_list if sources_list else [f"{company_name}の一般的な公開情報・AI知識ベース"]},
     "ir_sources_count": {len(sources_list) if sources_list else 0},
     "reliability_score": {90 if sources_list else 70}
   }}
 }}
 
 重要: JSON形式以外の文字は一切含めず、上記の構造に従って有効なJSONのみを出力してください。
+各分析項目では具体的な数値、比較データ、トレンド分析を必ず含めてください。
 """
         return prompt
     
@@ -277,7 +364,7 @@ class BusinessAnalyzer:
             
             # JSON形式を強制するための改善されたアプローチ
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5",
                 messages=[
                     {
                         "role": "system", 
@@ -289,7 +376,7 @@ class BusinessAnalyzer:
                     }
                 ],
                 temperature=0.1,
-                max_tokens=4000,
+                max_tokens=12000,
                 response_format={"type": "json_object"}  # JSON形式を強制
             )
             
@@ -397,12 +484,14 @@ def main():
         - 🏗️ **事業ポートフォリオ**: 主力事業・収益構造・事業領域
         
         **特徴:**
-        - 🔍 SerpAPI検索ベースのIR情報自動収集
-        - 📊 IR資料・決算情報・有価証券報告書を自動検索
+        - 🤖 OpenAI GPT-4o-mini による高度なAI分析
+        - � SerpAPI検索（オプション：設定時のみ）
         - 🎯 事業分析に特化（EVP分析は廃止）
-        - 📝 800文字の詳細分析
+        - 📝 2400文字の詳細分析（3倍拡張）
         - 📄 JSON形式での結果出力
-        - 🔗 収集した情報源のURL出典明記
+        - � AI知識ベースによる包括的企業分析
+        - 📋 PDF資料対応・多階層クロール（3-4階層）
+        - 💾 100,000文字のデータ収集容量
         """)
     
     # APIキー診断
