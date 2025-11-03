@@ -375,7 +375,6 @@ class BusinessAnalyzer:
                         "content": prompt
                     }
                 ],
-                temperature=0.1,
                 max_completion_tokens=12000,  # GPT-5対応パラメータ
                 response_format={"type": "json_object"}  # JSON形式を強制
             )
