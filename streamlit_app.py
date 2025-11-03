@@ -28,10 +28,12 @@ st.set_page_config(
 
 # 設定定数
 CONFIG = {
-    'MAX_CRAWL_DEPTH': 4,  # 3-4階層まで拡張
+    'MAX_CRAWL_DEPTH': 4,  # 4階層維持（重要資料アクセス）
     'DATE_LIMIT_YEARS': 3,
-    'MAX_SOURCES': 10,
-    'MAX_CONTENT_LENGTH': 100000,  # 2000から100000文字に拡張
+    'MAX_SOURCES': 12,  # 10→12に微増
+    'MAX_CONTENT_LENGTH': 50000,  # 100000→50000文字（バランス型）
+    'TIME_LIMIT_SECONDS': 180,  # 3分制限を追加
+    'PDF_PAGES_LIMIT': 10,  # PDF処理ページ制限
     'USER_AGENT': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
 }
 
@@ -42,6 +44,67 @@ class SearchBasedIRCollector:
         self.company_name = company_name
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': CONFIG['USER_AGENT']})
+        self.start_time = None  # 処理時間制限用
+    
+    def smart_content_filter(self, content):
+        """重要情報を優先的に抽出するスマートフィルタ"""
+        if not content:
+            return content
+            
+        # 重要キーワード（優先度順）
+        priority_keywords = [
+            # 財務・業績関連（最重要）
+            '売上高', '営業利益', '純利益', '当期純利益', '売上', '利益', '収益',
+            '業績', '決算', '財務', '損益', 'EBITDA', 'ROE', 'ROA',
+            
+            # 市場・事業関連
+            '市場シェア', '市場規模', '競合', '事業セグメント', '事業ポートフォリオ',
+            '成長率', '前年同期比', '前年比', 'YoY', 'QoQ',
+            
+            # 戦略・展望関連
+            '戦略', '方針', '計画', '展望', '予想', '見通し', '目標',
+            'DX', 'デジタル変革', 'AI', 'データ活用'
+        ]
+        
+        # コンテンツを段落に分割
+        paragraphs = content.split('\n')
+        
+        # 各段落にスコアを付与
+        scored_paragraphs = []
+        for paragraph in paragraphs:
+            if len(paragraph.strip()) < 20:  # 短すぎる段落は除外
+                continue
+                
+            score = 0
+            paragraph_lower = paragraph.lower()
+            
+            # キーワードマッチングでスコア計算
+            for i, keyword in enumerate(priority_keywords):
+                if keyword in paragraph_lower:
+                    # 早期のキーワードほど高スコア
+                    score += (len(priority_keywords) - i) * 2
+            
+            # 数値データがある段落は追加ポイント
+            if any(char.isdigit() for char in paragraph):
+                score += 10
+            
+            # パーセンテージや円表記がある場合は追加ポイント
+            if '%' in paragraph or '円' in paragraph or '億' in paragraph or '兆' in paragraph:
+                score += 15
+                
+            scored_paragraphs.append((score, paragraph))
+        
+        # スコア順でソート
+        scored_paragraphs.sort(key=lambda x: x[0], reverse=True)
+        
+        # 上位の段落を結合して返す
+        filtered_content = '\n'.join([para for score, para in scored_paragraphs])
+        
+        # 文字数制限を適用
+        if len(filtered_content) > CONFIG['MAX_CONTENT_LENGTH']:
+            filtered_content = filtered_content[:CONFIG['MAX_CONTENT_LENGTH']] + '...'
+            
+        return filtered_content
     
     def get_serpapi_key(self):
         """SerpAPIキー取得（本番環境対応）"""
@@ -107,6 +170,9 @@ class SearchBasedIRCollector:
     
     def search_ir_information(self):
         """IR関連情報を検索ベースで収集"""
+        import time
+        self.start_time = time.time()  # 処理開始時間を記録
+        
         serpapi_key = self.get_serpapi_key()
         if not serpapi_key:
             st.info("🔍 SerpAPIキーが未設定のため、OpenAI APIの知識ベースで分析を実行します")
@@ -124,6 +190,11 @@ class SearchBasedIRCollector:
         successful_searches = 0
         
         for query in search_queries:
+            # 時間制限チェック
+            if time.time() - self.start_time > CONFIG['TIME_LIMIT_SECONDS']:
+                st.warning(f"⏱️ 時間制限({CONFIG['TIME_LIMIT_SECONDS']}秒)に達したため処理を停止しました")
+                break
+                
             try:
                 st.info(f"🔍 検索中: {query}")
                 search_results = self.search_with_serpapi(query, serpapi_key)
@@ -131,6 +202,11 @@ class SearchBasedIRCollector:
                 if search_results and 'organic_results' in search_results:
                     successful_searches += 1
                     for result in search_results['organic_results'][:2]:  # 上位2件のみ
+                        # 時間制限チェック
+                        if time.time() - self.start_time > CONFIG['TIME_LIMIT_SECONDS']:
+                            st.warning(f"⏱️ 時間制限に達したため、残りの処理をスキップします")
+                            break
+                            
                         url = result.get('link', '')
                         title = result.get('title', '')
                         snippet = result.get('snippet', '')
@@ -140,9 +216,11 @@ class SearchBasedIRCollector:
                             # Webページの内容を取得（拡張版）
                             content = self.fetch_webpage_content(url)
                             if content:
+                                # スマートフィルタリングを適用
+                                filtered_content = self.smart_content_filter(content)
                                 collected_data.append({
                                     'url': url,
-                                    'content': content[:CONFIG['MAX_CONTENT_LENGTH']],  # 100000文字まで拡張
+                                    'content': filtered_content,  # フィルタリング済みコンテンツ
                                     'title': title,
                                     'snippet': snippet,
                                     'search_query': query
@@ -226,7 +304,7 @@ class SearchBasedIRCollector:
             with io.BytesIO(pdf_content) as pdf_stream:
                 with pdfplumber.open(pdf_stream) as pdf:
                     text = ""
-                    for page in pdf.pages[:20]:  # 最初の20ページまで
+                    for page in pdf.pages[:CONFIG['PDF_PAGES_LIMIT']]:  # CONFIG設定に従う
                         if page.extract_text():
                             text += page.extract_text() + "\n"
                     
