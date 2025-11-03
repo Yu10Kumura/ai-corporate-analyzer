@@ -106,6 +106,92 @@ class SearchBasedIRCollector:
             
         return filtered_content
     
+    def format_text_for_display(self, text):
+        """テキストを読みやすく整形（改行重視・構造化）"""
+        if not text or len(text.strip()) == 0:
+            return text
+            
+        # 句点での分割を基本にして段落を作成
+        sentences = text.split('。')
+        formatted_sentences = []
+        
+        for i, sentence in enumerate(sentences):
+            sentence = sentence.strip()
+            if len(sentence) == 0:
+                continue
+                
+            # 句点を復元
+            if not sentence.endswith('。') and i < len(sentences) - 1:
+                sentence += '。'
+            
+            formatted_sentences.append(sentence)
+            
+            # 2-3文ごとに改行を挿入（読みやすさ重視）
+            if (i + 1) % 2 == 0 and i < len(sentences) - 2:
+                formatted_sentences.append('\n')
+        
+        # 重要な数値・キーワードをハイライト
+        formatted_text = '\n'.join(formatted_sentences)
+        return self.highlight_important_info(formatted_text)
+    
+    def highlight_important_info(self, text):
+        """重要な数値・キーワードを太字でハイライト"""
+        import re
+        
+        # 数値関連のハイライト（改行考慮を強化）
+        text = re.sub(r'(\d+(?:,\d{3})*億円)', r'**\1**', text)  # 金額
+        text = re.sub(r'(\d+(?:,\d{3})*兆円)', r'**\1**', text)  # 大きな金額
+        text = re.sub(r'(\d+\.?\d*%)', r'**\1**', text)  # パーセンテージ
+        text = re.sub(r'(前年(?:同期)?比[+-]?\d+\.?\d*%)', r'**\1**', text)  # 成長率
+        text = re.sub(r'(売上高\d+)', r'**\1**', text)  # 売上
+        
+        # 重要キーワードのハイライト
+        important_keywords = [
+            '売上高', '営業利益', '純利益', '当期純利益', 'EBITDA',
+            '市場シェア', 'シェア', '市場規模', '成長率',
+            '従業員数', '売上構成比', '利益率', 'ROE', 'ROA'
+        ]
+        
+        for keyword in important_keywords:
+            # 単語境界を考慮してハイライト
+            text = re.sub(f'({re.escape(keyword)})', r'**\1**', text)
+        
+        return text
+    
+    def display_formatted_analysis(self, analysis_data):
+        """分析結果を構造化して美しく表示"""
+        
+        # セクション定義（アイコン + 日本語タイトル）
+        sections = [
+            ("📊", "業界・市場分析", "industry_market", "市場環境、業界動向、成長性に関する分析"),
+            ("🎯", "市場ポジション", "market_position", "競合比較、市場シェア、競争優位性"),  
+            ("💡", "差別化要因", "differentiation", "独自の強み、技術優位性、ブランド価値"),
+            ("🏢", "事業ポートフォリオ", "business_portfolio", "事業構成、収益構造、成長戦略")
+        ]
+        
+        for icon, title, key, description in sections:
+            content = analysis_data.get(key, '')
+            
+            if content and len(content.strip()) > 0:
+                # セクションヘッダー
+                st.markdown(f"## {icon} {title}")
+                st.markdown(f"*{description}*")
+                st.markdown("")  # 空行追加
+                
+                # コンテンツを整形して表示
+                formatted_content = self.format_text_for_display(content)
+                st.markdown(formatted_content)
+                
+                # セクション区切り
+                st.markdown("---")
+                st.markdown("")  # 区切り後の空行
+            else:
+                # コンテンツがない場合
+                st.markdown(f"## {icon} {title}")
+                st.info(f"{title}の情報は収集できませんでした。")
+                st.markdown("---")
+                st.markdown("")
+    
     def get_serpapi_key(self):
         """SerpAPIキー取得（本番環境対応）"""
         # 環境変数を最優先でチェック
@@ -676,19 +762,11 @@ def main():
         with tab1:
             st.subheader("🏆 企業ビジネス分析")
             
-            business_labels = {
-                "industry_market": "📈 業界・市場分析",
-                "market_position": "🏆 業界内ポジション",
-                "differentiation": "⭐ 独自性・差別化要因",
-                "business_portfolio": "🏗️ 事業ポートフォリオ分析"
-            }
-            
             business_data = analysis_data.get('business_analysis', {})
             if business_data:
-                for key, label in business_labels.items():
-                    with st.expander(label, expanded=True):
-                        content = business_data.get(key, "分析データが不足しています")
-                        st.write(content)
+                # 整形機能を使って美しく表示
+                test_collector = SearchBasedIRCollector("display")
+                test_collector.display_formatted_analysis(business_data)
             else:
                 st.warning("事業分析データが生成されませんでした。")
         
